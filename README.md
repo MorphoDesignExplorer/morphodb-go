@@ -14,13 +14,23 @@ To start up the server: (On Linux)
 go run ./main
 ```
 
+If you're using a .env file for environment variables:
+```sh
+go build -o main-bin main
+(source .env && ./main-bin)
+```
+
 
 ## Build Instructions
+### Local Go Build
 ```sh
 go build . 
 ```
 
-Docker coming soon.
+### Docker Container:
+```sh
+docker build --tag morphodb-go .
+```
 
 ## Pointers for future developers
 
@@ -49,5 +59,5 @@ A locustfile is provided to load test the server. Refer to [Locust's Quick Start
 | AWS_S3_ENDPOINT_URL | URL pointing to the s3 location containing our assets |
 | AWS_STORAGE_BUCKET_NAME | Name of the stroage bucket containing our assets |
 
-You can set these variables up on the shell or the dockerfile.
+You can set these variables up on the shell or in an .env file. A .env file is recommended though, as it's easier to load into the shell.
 
