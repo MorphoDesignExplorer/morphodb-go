@@ -10,8 +10,9 @@ import (
 	"net/http"
 	"runtime"
 
+	_ "github.com/glebarez/go-sqlite" // pure go driver for windows platforms
 	"github.com/gorilla/mux"
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/mattn/go-sqlite3" // go driver for linux platforms
 	"github.com/pquerna/ffjson/ffjson"
 )
 
@@ -55,6 +56,15 @@ type ErrorMessage struct {
 	Message string `json:"message"`
 }
 
+// provides different drivers depending on the build platform
+func getDriver() string {
+	if runtime.GOOS == "windows" {
+		return "sqlite"
+	} else {
+		return "sqlite3"
+	}
+}
+
 // Writes a 500 to the output stream.
 //
 // The calling route should return after invoking this function.
@@ -93,7 +103,7 @@ func GetProjects(variables map[string]string, dbString string) ([]Project, error
 
 	projectName, singularRequest := variables["project"]
 
-	db, err := sql.Open("sqlite3", dbString)
+	db, err := sql.Open(getDriver(), dbString)
 	if err != nil {
 		LogError(err)
 		return nil, err
@@ -155,7 +165,7 @@ func GetProjects(variables map[string]string, dbString string) ([]Project, error
 //
 // Returns the set of solutions, or an error.
 func GetSolutions(variables map[string]string, dbString string, urlGenerator func(string) string) ([]Solution, error) {
-	db, err := sql.Open("sqlite3", dbString)
+	db, err := sql.Open(getDriver(), dbString)
 	if err != nil {
 		LogError(err)
 		return nil, err
