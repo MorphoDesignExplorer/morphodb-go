@@ -1,0 +1,7 @@
+.vscode
+dump.py
+__pycache__
+.env*
+*.sqlite
+*.db
+*.pem
