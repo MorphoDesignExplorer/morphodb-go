@@ -265,6 +265,7 @@ func GetSolutionsWrapper(config Config) func(http.ResponseWriter, *http.Request)
 		solutionSet, err := GetSolutions(variables, dbString, urlGenerator)
 		if err != nil {
 			HandleError(writer)
+			return
 		}
 
 		bytes, err := ffjson.Marshal(solutionSet)

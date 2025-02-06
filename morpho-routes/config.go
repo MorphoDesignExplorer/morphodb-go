@@ -19,12 +19,12 @@ func GetConfig() (Config, error) {
 	}
 
 	result.AWS_S3_ENDPOINT_URL = os.Getenv("AWS_S3_ENDPOINT_URL")
-	if len(result.DB_STRING) == 0 {
+	if len(result.AWS_S3_ENDPOINT_URL) == 0 {
 		return result, errors.New("AWS_S3_ENDPOINT_URL was not set")
 	}
 
 	result.AWS_STORAGE_BUCKET_NAME = os.Getenv("AWS_STORAGE_BUCKET_NAME")
-	if len(result.DB_STRING) == 0 {
+	if len(result.AWS_STORAGE_BUCKET_NAME) == 0 {
 		return result, errors.New("AWS_STORAGE_BUCKET_NAME was not set")
 	}
 
