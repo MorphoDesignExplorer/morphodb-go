@@ -1,4 +1,4 @@
-module morphodb-go
+module github.com/MorphoDesignExplorer/morphodb-go
 
 go 1.23.2
 
