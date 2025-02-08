@@ -4,11 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	morphoroutes "morphodb-go/morpho-routes"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	morphoroutes "github.com/MorphoDesignExplorer/morphodb-go/morpho-routes"
 
 	"github.com/gorilla/mux"
 )
