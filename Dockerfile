@@ -6,7 +6,7 @@ COPY . ./
 
 EXPOSE 8000
 
-RUN go build -o /main-bin main
+RUN go build -o /main-bin server.go
 
 WORKDIR /
 
