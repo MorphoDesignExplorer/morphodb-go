@@ -238,6 +238,11 @@ func GetProjectsWrapper(config Config) func(http.ResponseWriter, *http.Request) 
 		variables := mux.Vars(request) // map that may or may not have the key 'project'
 		dbString := fmt.Sprintf("file:%s?_journal:WAL", config.DB_STRING)
 		projectSet, err := GetProjects(variables, dbString)
+		if err != nil {
+			HandleError(writer)
+			return
+		}
+
 		bytes, err := ffjson.Marshal(projectSet)
 		if err != nil {
 			HandleError(writer)
@@ -256,7 +261,7 @@ func GetProjectsWrapper(config Config) func(http.ResponseWriter, *http.Request) 
 // Returns an HTTP handler for the GetSolutions route.
 func GetSolutionsWrapper(config Config) func(http.ResponseWriter, *http.Request) {
 	urlGenerator := func(filename string) string {
-		return fmt.Sprintf("%s/%s/%s/", config.AWS_S3_ENDPOINT_URL, config.AWS_STORAGE_BUCKET_NAME, "media") + filename
+		return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", config.AWS_STORAGE_BUCKET_NAME, config.AWS_REGION, filename)
 	}
 
 	return func(writer http.ResponseWriter, request *http.Request) {

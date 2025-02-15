@@ -7,7 +7,7 @@ import (
 
 type Config struct {
 	DB_STRING               string
-	AWS_S3_ENDPOINT_URL     string
+	AWS_REGION              string
 	AWS_STORAGE_BUCKET_NAME string
 }
 
@@ -18,9 +18,9 @@ func GetConfig() (Config, error) {
 		return result, errors.New("DB_STRING was not set")
 	}
 
-	result.AWS_S3_ENDPOINT_URL = os.Getenv("AWS_S3_ENDPOINT_URL")
-	if len(result.AWS_S3_ENDPOINT_URL) == 0 {
-		return result, errors.New("AWS_S3_ENDPOINT_URL was not set")
+	result.AWS_REGION = os.Getenv("AWS_REGION")
+	if len(result.AWS_REGION) == 0 {
+		return result, errors.New("AWS_REGION was not set")
 	}
 
 	result.AWS_STORAGE_BUCKET_NAME = os.Getenv("AWS_STORAGE_BUCKET_NAME")
