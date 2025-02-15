@@ -56,8 +56,10 @@ A locustfile is provided to load test the server. Refer to [Locust's Quick Start
 | Variable | Purpose |
 | -------- | ------- |
 | DB_STRING | Path to the SQLite databse on disk |
-| AWS_S3_ENDPOINT_URL | URL pointing to the s3 location containing our assets |
-| AWS_STORAGE_BUCKET_NAME | Name of the stroage bucket containing our assets |
+| AWS_STORAGE_BUCKET_NAME | Name of the storage bucket containing our assets |
+| AWS_REGION | Region where the storage bucket is situated |
 
 You can set these variables up on the shell or in an .env file. A .env file is recommended though, as it's easier to load into the shell.
+
+A sample env file is provided for reference too. For deployment, remove the export statements preceding the variable declarations.
 
