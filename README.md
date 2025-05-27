@@ -17,7 +17,7 @@ go run ./main
 If you're using a .env file for environment variables:
 ```sh
 go build -o main-bin main
-(source .env && ./main-bin)
+env $(cat .env) ./main-bin
 ```
 
 
