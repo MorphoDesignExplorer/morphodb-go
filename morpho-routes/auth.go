@@ -2,62 +2,239 @@ package morphoroutes
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
+	"log"
 	"net/http"
-
-	jwt "github.com/golang-jwt/jwt/v5"
+	"strings"
+	"time"
 )
 
+/*
+	The auth modules contain a collection of routes and methods to:
+	1. Initiate and validate 2FA Login attempts to issue encrypted JWT tokens
+	2. Encrypt and Decrypt tokens issued by the system
+	3. Check the ACL level of a token
+	4. Initiate and validate Password Resets
+
+	The system generates and encrypts JWT tokens.
+	There are different secret keys used:
+		1. A secret key for hashing passwords (this needs to remain constant) and
+		2. A secret key for encrypting tokens.
+
+	These secrets are acquired from the AWS Parameter Store, to avoid storing them locally.
+*/
+
+type HandlerFunc func(http.ResponseWriter, *http.Request)
+
 // Middleware for allowing only authenticated users on certain routes.
-func AuthenticatedMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// access cookie
-		// validate jwt within cookie
-		// if jwt is an auth token, allow access
-		// else deny access
-		isValidated := false
-		if isValidated {
-			next.ServeHTTP(w, r)
+//
+// next is the http handler method to be called if an authenticated user has the right permissions to operate on the data.
+//
+// permissionFlags is a combination of Permission Flags (see auth_methods.go).
+//
+// Returns a http handler method wrapped in the authentication middleware.
+func AuthenticatedMiddleware(next HandlerFunc, permissionFlags PermissionFlags) HandlerFunc {
+	authState.Init()
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := r.Header.Get("Authorization")
+		if strings.Index(token, "Bearer") == 0 && len(token) > 11 {
+			token = token[7:]
 		} else {
 			w.Header().Add("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			json.NewEncoder(w).Encode(ErrorMessage{"Not authenticated."})
+			return
 		}
-	})
+
+		authToken, err := VerifyToken[AuthToken](authState.secrets, []byte(token))
+
+		if authToken.Valid() && authToken.Permissions.HasPermission(permissionFlags) && err == nil {
+			next(w, r)
+		} else {
+			w.Header().Add("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(ErrorMessage{"Not authenticated."})
+			return
+		}
+	}
 }
 
-func RefreshSecret(writer http.ResponseWriter, request *http.Request) {
+type AuthState struct {
+	ResetSessionTokens map[string]string // A map of reset session tokens to the email that it is associated with.
+	IsInitialized      bool
+	secrets            Secrets
 }
 
-type InitLoginRequest struct {
-	username, password string
+var authState AuthState
+
+func (a *AuthState) Init() {
+	if a.IsInitialized {
+		return
+	}
+	a.IsInitialized = true
+	a.ResetSessionTokens = make(map[string]string)
+	a.secrets.Init()
 }
 
-type IntermediaryToken struct {
-	username string
-	jwt.RegisteredClaims
+/*
+Route for a login process. Takes an email and password and returns an encrypted AuthToken.
+
+The token should expire in 30 days.
+*/
+func LoginHandler(config Config) HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		authState.Init()
+		request.ParseForm()
+
+		email, ok := request.Form["email"]
+		if !ok || len(email) != 1 {
+			HandleErrorWithMessage(writer, fmt.Errorf("An email was not provided."))
+			return
+		}
+
+		password, ok := request.Form["password"]
+		if !ok || len(password) != 1 {
+			HandleErrorWithMessage(writer, fmt.Errorf("A password was not provided."))
+			return
+		}
+
+		// check if password hash matches
+		db, err := StartConn(config)
+		user, err := GetUser(db, email[0])
+		if err != nil {
+			HandleErrorWithMessage(writer, fmt.Errorf("User or Password provided wasn't correct."))
+			return
+		}
+
+		if !VerifyUser(user, password[0], authState.secrets) {
+			HandleErrorWithMessage(writer, fmt.Errorf("User or Password provided wasn't correct."))
+			return
+		}
+
+		// generate auth token that expires in a month
+		payload, err := GenerateToken(
+			authState.secrets,
+			&AuthToken{&user.Email, &user.Permissions, &ExpirationDetails{}},
+			time.Hour*24*30,
+		)
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		writer.Header().Add("Content-Type", "text/plain")
+		writer.WriteHeader(http.StatusOK)
+		writer.Write(payload)
+	}
 }
 
-func InitLogin(writer http.ResponseWriter, request *http.Request) {
-	// check if password hash matches
-	// generate intermediary jwt with short expiration
-	// token := jwt.NewWithClaims(jwt.SigningMethodHS256, IntermediaryToken{username: "hi!"})
-	// signed_token := token.SignedString("somekey") // TODO: get a signing key from the environment
-}
+/*
+Route for verifying a login attempt with an otp.
+Accepts an encrypted IntermediaryLoginToken in the authorization header section
+and an otp in the form section.
 
-type VerifyLoginRequest struct {
-	otp string
-	jwt.RegisteredClaims
-}
-
-type AuthToken struct {
-	username string
-}
-
+Returns an encrypted authorization JWT.
+*/
 func VerifyLogin(writer http.ResponseWriter, request *http.Request) {
+	authState.Init()
+	bytes, err := io.ReadAll(request.Body)
+	if err != nil {
+		LogError(err)
+		HandleError(writer)
+		return
+	}
+
+	token, err := VerifyToken[AuthToken](authState.secrets, bytes)
+	if err != nil {
+		log.Println(err)
+		LogError(err)
+		HandleError(writer)
+		return
+	}
+
+	log.Println("token:", token, token.Valid())
+
+	resp := []byte{}
+	writer.Header().Add("Content-Type", "text/plain")
+	writer.WriteHeader(http.StatusOK)
+	writer.Write(resp)
 }
 
+/*
+Route for starting a password reset session.
+Takes an email, and sends a reset request to the email if it exists.
+
+Rate limit this route, but not transparently.
+*/
 func InitiateResetPassword(writer http.ResponseWriter, request *http.Request) {
+	// TODO implement this after acquiring a domain.
+	authState.Init()
+	err := request.ParseForm()
+	if err != nil {
+		LogError(err)
+		HandleError(writer)
+		return
+	}
 }
 
-func ResetPassword(writer http.ResponseWriter, request *http.Request) {
+/*
+Route for resetting a password.
+Takes a reset session token in the URL parameter section, and a password in the form section.
+
+Once the password is reset, invalidate the password reset session token.
+*/
+func ResetPasswordHandler(config Config) HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		var err error
+		authState.Init()
+
+		tokenString := request.Header.Get("Authorization")
+		if strings.Index(tokenString, "Bearer ") == 0 {
+			tokenString = tokenString[7:]
+		}
+		fmt.Println(tokenString)
+		token, err := VerifyToken[ResetSessionToken](authState.secrets, []byte(tokenString))
+		if err != nil {
+			LogError(err)
+			HandleErrorWithMessage(writer, fmt.Errorf("No reset session."))
+			return
+		}
+
+		if !token.Valid() {
+			HandleErrorWithMessage(writer, fmt.Errorf("Invalid reset session."))
+			return
+		}
+
+		err = request.ParseForm()
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		db, err := StartConn(config)
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		password, ok := request.Form["password"]
+		if !ok || len(password) != 1 {
+			HandleErrorWithMessage(writer, fmt.Errorf("A password was not provided."))
+			return
+		}
+
+		err = ReplacePassword(db, *token.Email, password[0], authState.secrets)
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		response := []byte("Password was reset.")
+		SuccessfulResponse(writer, request, &response)
+	}
 }

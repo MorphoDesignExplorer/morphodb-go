@@ -6,9 +6,10 @@ import (
 )
 
 type Config struct {
-	DB_STRING               string
-	AWS_REGION              string
-	AWS_STORAGE_BUCKET_NAME string
+	DB_STRING               string // where is the SQLite database?
+	AWS_REGION              string // what is the aws region we're running on?
+	AWS_STORAGE_BUCKET_NAME string // what is the name of the storage bucket?
+	ENVIRONMENT           	string // are we running this server on production? (either prod or dev)
 }
 
 func GetConfig() (Config, error) {
@@ -26,6 +27,13 @@ func GetConfig() (Config, error) {
 	result.AWS_STORAGE_BUCKET_NAME = os.Getenv("AWS_STORAGE_BUCKET_NAME")
 	if len(result.AWS_STORAGE_BUCKET_NAME) == 0 {
 		return result, errors.New("AWS_STORAGE_BUCKET_NAME was not set")
+	}
+
+	result.ENVIRONMENT = os.Getenv("ENVIRONMENT")
+	if len(result.ENVIRONMENT) == 0 {
+		return result, errors.New("ENVIRONMENT was not set")
+	} else if result.ENVIRONMENT != "prod" && result.ENVIRONMENT != "dev" {
+		return result, errors.New("ENVIRONMENT can only have the following values: prod, dev")
 	}
 
 	return result, nil

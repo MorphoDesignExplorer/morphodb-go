@@ -37,6 +37,11 @@ func (c *Cacher) Cache(uri string, content []byte) {
 	c.directory[uri] = content
 }
 
+// invalidates the content associated with a uri.
+func (c *Cacher) Invalidate(uri string) {
+	delete(c.directory, uri)
+}
+
 // Middleware to cache responses.
 func CacheMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

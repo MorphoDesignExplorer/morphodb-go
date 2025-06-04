@@ -5,3 +5,7 @@ __pycache__
 *.sqlite
 *.db
 *.pem
+main-bin
+assets
+morphodb-go
+

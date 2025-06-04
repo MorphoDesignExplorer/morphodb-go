@@ -1,5 +1,3 @@
-//go:generate ffjson $GOFILE
-
 package morphoroutes
 
 import (
@@ -13,65 +11,38 @@ import (
 	_ "github.com/glebarez/go-sqlite" // pure go driver for windows platforms
 	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3" // go driver for linux platforms
-	"github.com/pquerna/ffjson/ffjson"
 )
-
-// var DB_STRING string = fmt.Sprintf("file:%s?_journal:WAL", os.Getenv("DB_STRING"))
-
-type Description struct {
-	Slug string `json:"slug"`
-	Text string `json:"text"`
-}
-
-type Metadata struct {
-	Captions    *json.RawMessage `json:"captions"`
-	Description Description      `json:"description"`
-	HumanName   string           `json:"human_name"`
-}
-
-type Project struct {
-	CreationDate     string           `json:"creation_date"`
-	ProjectName      string           `json:"project_name"`
-	VariableMetadata *json.RawMessage `json:"variable_metadata"`
-	OutputMetadata   *json.RawMessage `json:"output_metadata"`
-	Assets           *json.RawMessage `json:"assets"`
-	Deleted          bool             `json:"deleted"`
-	ProjectMetadata  Metadata         `json:"metadata"`
-}
-
-type Solution struct {
-	Id              string           `json:"id"`
-	ScopedId        string           `json:"scoped_id"`
-	Parameter       *json.RawMessage `json:"parameters"`
-	OutputParameter *json.RawMessage `json:"output_parameters"`
-	Assets          []Asset          `json:"files"`
-}
-
-type Asset struct {
-	Tag  string `json:"tag"`
-	File string `json:"file"`
-}
 
 type ErrorMessage struct {
 	Message string `json:"message"`
 }
 
-// provides different drivers depending on the build platform
-func getDriver() string {
-	if runtime.GOOS == "windows" {
-		return "sqlite"
-	} else {
-		return "sqlite3"
-	}
-}
-
 // Writes a 500 to the output stream.
 //
 // The calling route should return after invoking this function.
+//
+// Parameters:
+//
+// writer: a handler to a Response Writer
 func HandleError(writer http.ResponseWriter) {
 	writer.Header().Add("Content-Type", "application/json")
 	writer.WriteHeader(http.StatusInternalServerError)
 	json.NewEncoder(writer).Encode(ErrorMessage{"Internal Server Error"})
+}
+
+// Writes a 500 to the output stream, with  a custom error message.
+//
+// The calling route should return after invoking this function.
+//
+// Parameters:
+//
+// writer: a handler to a ResponseWriter
+//
+// err: An error to be communicated with the user.
+func HandleErrorWithMessage(writer http.ResponseWriter, err error) {
+	writer.Header().Add("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusInternalServerError)
+	json.NewEncoder(writer).Encode(ErrorMessage{err.Error()})
 }
 
 // Logs an error generated at a particular position to the logging module.
@@ -94,58 +65,45 @@ func SuccessfulResponse(writer http.ResponseWriter, request *http.Request, conte
 //
 // Variables is a map that could contain the key project, which denotes the singular project to select. Do not provide the key if you need to fetch all the projects.
 //
-// dbString is the path to the SQLite database.
+// config is the set of environment variables.
 //
 // Returns the set of projects fetched, or an error.
-func GetProjects(variables map[string]string, dbString string) ([]Project, error) {
+func GetProjects(variables map[string]string, config Config) ([]Project, error) {
 	broadQuery := "select creation_date, project.project_name, variable_metadata, output_metadata, assets, deleted, metadata.captions, metadata.slug, metadata.markdown, metadata.human_name FROM project, metadata where project.project_name = metadata.project_name;"
 	constrictedQuery := "select creation_date, project.project_name, variable_metadata, output_metadata, assets, deleted, metadata.captions, metadata.slug, metadata.markdown, metadata.human_name FROM project, metadata WHERE project.project_name = metadata.project_name AND project.project_name = ?;"
 
 	projectName, singularRequest := variables["project"]
 
-	db, err := sql.Open(getDriver(), dbString)
+	db, err := StartConn(config)
 	if err != nil {
 		LogError(err)
 		return nil, err
 	}
-
 	defer db.Close()
 
 	var result *sql.Rows
-
 	if singularRequest {
 		result, err = db.Query(constrictedQuery, projectName)
-		if err != nil {
-			LogError(err)
-			return nil, err
-		}
 	} else {
 		result, err = db.Query(broadQuery)
-		if err != nil {
-			LogError(err)
-			return nil, err
-		}
+	}
+
+	if err != nil {
+		LogError(err)
+		return nil, err
 	}
 	defer result.Close()
 
 	projects := make([]Project, 0)
 	for result.Next() {
 		var temp Project
-		var variableMetadata, outputMetadata, assets, captions []byte
 		var tempMetadata Metadata
-		var tempDescription Description
 
-		err = result.Scan(&temp.CreationDate, &temp.ProjectName, &variableMetadata, &outputMetadata, &assets, &temp.Deleted, &captions, &tempDescription.Slug, &tempDescription.Text, &tempMetadata.HumanName)
+		err = result.Scan(&temp.CreationDate, &temp.ProjectName, &temp.VariableMetadata, &temp.OutputMetadata, &temp.Assets, &temp.Deleted, &tempMetadata.Captions, &tempMetadata.Description.Slug, &tempMetadata.Description.Text, &tempMetadata.HumanName)
 		if err != nil {
-			LogError(err)
 			return nil, err
 		}
 
-		tempMetadata.Captions = (*json.RawMessage)(&captions)
-		temp.VariableMetadata = (*json.RawMessage)(&variableMetadata)
-		temp.OutputMetadata = (*json.RawMessage)(&outputMetadata)
-		temp.Assets = (*json.RawMessage)(&assets)
-		tempMetadata.Description = tempDescription
 		temp.ProjectMetadata = tempMetadata
 		projects = append(projects, temp)
 	}
@@ -159,55 +117,48 @@ func GetProjects(variables map[string]string, dbString string) ([]Project, error
 // variables is a map that contains the project and solution key, where project should be filled and solution can be ommitted.
 // the solution key can be omitted to fetch all solutions associated with a project.
 //
-// dbString is the path to the SQLite database.
+// config is the set of environment variables.
 //
 // urlGenerator generates the file path prefix for the assets fetched.
 //
 // Returns the set of solutions, or an error.
-func GetSolutions(variables map[string]string, dbString string, urlGenerator func(string) string) ([]Solution, error) {
-	db, err := sql.Open(getDriver(), dbString)
+func GetSolutions(variables map[string]string, config Config, urlGenerator func(string) string) ([]Solution, error) {
+	broadQuery := "SELECT solution.id, solution.scoped_id, parameters, output_parameters, tag, file FROM solution, asset WHERE asset.solution_id = solution.id AND solution.project_name = ?"
+	constrictedQuery := "SELECT solution.id, solution.scoped_id, parameters, output_parameters, tag, file FROM solution, asset WHERE asset.solution_id = solution.id AND solution.project_name = ? AND solution.id = ?"
+
+	projectName := variables["project"]
+	solutionId, singularRequest := variables["solution"]
+
+	db, err := StartConn(config)
 	if err != nil {
 		LogError(err)
 		return nil, err
 	}
 	defer db.Close()
 
-	projectName := variables["project"]
-	solutionId, singularRequest := variables["solution"]
-
-	broadQuery := "SELECT solution.id, solution.scoped_id, parameters, output_parameters, tag, file FROM solution, asset WHERE asset.solution_id = solution.id AND solution.project_name = ?"
-	constrictedQuery := "SELECT solution.id, solution.scoped_id, parameters, output_parameters, tag, file FROM solution, asset WHERE asset.solution_id = solution.id AND solution.project_name = ? AND solution.id = ?"
-
 	var result *sql.Rows
-
 	if singularRequest {
 		result, err = db.Query(constrictedQuery, projectName, solutionId)
-		if err != nil {
-			LogError(err)
-			return nil, err
-		}
-		defer result.Close()
 	} else {
 		result, err = db.Query(broadQuery, projectName)
-		if err != nil {
-			return nil, err
-		}
-		defer result.Close()
 	}
+	if err != nil {
+		LogError(err)
+		return nil, err
+	}
+	defer result.Close()
 
 	solutions := make(map[string]Solution)
 	for result.Next() {
 		var tempSolution Solution
-		var parameter, outputParameter []byte
 		var fileTag, fileUri string
 
-		err = result.Scan(&tempSolution.Id, &tempSolution.ScopedId, &parameter, &outputParameter, &fileTag, &fileUri)
+		err = result.Scan(&tempSolution.Id, &tempSolution.ScopedId, &tempSolution.Parameter, &tempSolution.OutputParameter, &fileTag, &fileUri)
 		if err != nil {
 			LogError(err)
 			return nil, err
 		}
-		tempSolution.Parameter = (*json.RawMessage)(&parameter)
-		tempSolution.OutputParameter = (*json.RawMessage)(&outputParameter)
+
 		fileUri = urlGenerator(fileUri)
 
 		if solution, ok := solutions[tempSolution.Id]; ok {
@@ -236,14 +187,13 @@ func GetSolutions(variables map[string]string, dbString string, urlGenerator fun
 func GetProjectsWrapper(config Config) func(http.ResponseWriter, *http.Request) {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		variables := mux.Vars(request) // map that may or may not have the key 'project'
-		dbString := fmt.Sprintf("file:%s?_journal:WAL", config.DB_STRING)
-		projectSet, err := GetProjects(variables, dbString)
+		projectSet, err := GetProjects(variables, config)
 		if err != nil {
 			HandleError(writer)
 			return
 		}
 
-		bytes, err := ffjson.Marshal(projectSet)
+		bytes, err := json.Marshal(projectSet)
 		if err != nil {
 			HandleError(writer)
 			return
@@ -266,14 +216,13 @@ func GetSolutionsWrapper(config Config) func(http.ResponseWriter, *http.Request)
 
 	return func(writer http.ResponseWriter, request *http.Request) {
 		variables := mux.Vars(request) // map that has the key 'project' and may or may not have the key 'solution'
-		dbString := fmt.Sprintf("file:%s?_journal:WAL", config.DB_STRING)
-		solutionSet, err := GetSolutions(variables, dbString, urlGenerator)
+		solutionSet, err := GetSolutions(variables, config, urlGenerator)
 		if err != nil {
 			HandleError(writer)
 			return
 		}
 
-		bytes, err := ffjson.Marshal(solutionSet)
+		bytes, err := json.Marshal(solutionSet)
 		if err != nil {
 			HandleError(writer)
 			return
