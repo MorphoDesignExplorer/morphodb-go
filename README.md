@@ -48,9 +48,7 @@ No HTTPS is implemented either as the server is supposed to sit behind a reverse
 A locustfile is provided to load test the server. Refer to [Locust's Quick Start Guide](https://docs.locust.io/en/stable/quickstart.html) to get started.
 
 ## TODO Items:
-
-1. Implement project upload routes.
-2. Implement generic auth for future frontend services.
+1. Need to implement email support for Password Reset Sessions.
 
 ## Environment Variables to set:
 | Variable | Purpose |
@@ -58,6 +56,7 @@ A locustfile is provided to load test the server. Refer to [Locust's Quick Start
 | DB_STRING | Path to the SQLite databse on disk |
 | AWS_STORAGE_BUCKET_NAME | Name of the storage bucket containing our assets |
 | AWS_REGION | Region where the storage bucket is situated |
+| ENVIRONMENT | Environment that the instance is running in (`dev` or `prod`) |
 
 You can set these variables up on the shell or in an .env file. A .env file is recommended though, as it's easier to load into the shell.
 
