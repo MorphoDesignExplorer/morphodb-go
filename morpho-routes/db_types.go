@@ -14,7 +14,7 @@ import (
 
 type Description struct {
 	Slug string `json:"slug" validate:"zero"`
-	Text string `json:"markdown" validate:"zero"`
+	Text string `json:"text" validate:"zero"`
 }
 
 type Caption struct {
