@@ -29,7 +29,7 @@ func setupDB() error {
 
 	queries := []string{
 		"CREATE TABLE IF NOT EXISTS project (creation_date date not null, project_name text primary key, variable_metadata jsonb not null, output_metadata jsonb not null, assets jsonb, deleted integer not null)",
-		"CREATE TABLE IF NOT EXISTS solution (id integer primary key, parameters jsonb not null, output_parameters jsonb, project_name text not null, scoped_id integer, foreign key(project_name) references project(project_name));",
+		"CREATE TABLE IF NOT EXISTS solution (id text primary key, parameters jsonb not null, output_parameters jsonb, project_name text not null, scoped_id integer, foreign key(project_name) references project(project_name));",
 		"CREATE INDEX IF NOT EXISTS solution_to_project on solution(project_name);",
 		"CREATE TABLE IF NOT EXISTS asset(id text, file text, tag text, solution_id integer, foreign key(solution_id) references solution(id), PRIMARY KEY (solution_id, tag));",
 		"CREATE INDEX IF NOT EXISTS asset_id on asset(id)",

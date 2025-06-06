@@ -199,24 +199,24 @@ name is the name of the file on disk.
 
 This method does not use any AWS credentials, and relies on the instance having IAM policies that allow GET/PUT/DELETE on the morpho-images bucket.
 
-Returns an error if any step of the process fails.
+Returns an error if any step of the process fails, and the file's extension.
 */
-func uploadAssetS3(fileHeader *multipart.FileHeader, name string) error {
+func uploadAssetS3(fileHeader *multipart.FileHeader, name string) (string, error) {
 	file, err := fileHeader.Open()
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	mime, err := mimetype.DetectReader(file)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	file.Seek(0, io.SeekStart) // Detect reader consumes the beginning of the file. So we need to reset the head of the file back to the start.
 
 	client, err := CreateS3Client()
 	if err != nil {
-		return nil
+		return "", nil
 	}
 
 	_, err = client.PutObject(context.TODO(), &s3.PutObjectInput{
@@ -225,7 +225,7 @@ func uploadAssetS3(fileHeader *multipart.FileHeader, name string) error {
 		Body:   file,
 	})
 
-	return err
+	return mime.Extension(), err
 }
 
 /*
@@ -246,17 +246,18 @@ and I'm on a time crunch.
 Hence,
 TODO: Restrict MIME types sensibly.
 
-Returns an error if any step of the process fails.
+Returns an error if any step of the process fails, and the file's extension.
+
 */
-func uploadAssetsLocal(fileHeader *multipart.FileHeader, name string) error {
+func uploadAssetsLocal(fileHeader *multipart.FileHeader, name string) (string, error) {
 	file, err := fileHeader.Open()
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	mime, err := mimetype.DetectReader(file)
 	if err != nil {
-		return err
+		return "", err
 	}
 	file.Close()
 
@@ -265,16 +266,16 @@ func uploadAssetsLocal(fileHeader *multipart.FileHeader, name string) error {
 	if writeHandle, err := os.OpenFile(fmt.Sprintf("assets/%s%s", name, mime.Extension()), os.O_CREATE|os.O_RDWR, 0644); err == nil {
 		buffer, err := io.ReadAll(file)
 		if err != nil {
-			return err
+			return "", err
 		}
 
 		n, err := writeHandle.Write(buffer)
 		if n != len(buffer) || err != nil {
-			return fmt.Errorf("could not write complete file: " + err.Error())
+			return "", fmt.Errorf("could not write complete file: " + err.Error())
 		}
-		return nil
+		return mime.Extension(), nil
 	} else {
-		return err
+		return "", err
 	}
 }
 
@@ -342,16 +343,23 @@ func CreateAssets(db *sql.DB, filetags []ProjectAssetField, solutionId string, s
 		config, err := GetConfig()
 		if err != nil { return err }
 
+		var extension string
 		if config.ENVIRONMENT == "prod" {
-			uploadAssetS3(handle, randomName)
+			extension, err = uploadAssetS3(handle, randomName)
+			if err != nil {
+				return err
+			}
 		} else {
-			uploadAssetsLocal(handle, randomName)
+			extension, err = uploadAssetsLocal(handle, randomName)
+			if err != nil {
+				return err
+			}
 		}
 
 		if _, err = tx.Exec(
 			"INSERT INTO asset (id, file, tag, solution_id) VALUES (?, ?, ?, ?)",
 			auuid.String(),
-			fmt.Sprintf("assets/%s", randomName),
+			fmt.Sprintf("assets/%s%s", randomName, extension),
 			tag,
 			solutionId,
 		); err != nil {
