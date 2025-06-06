@@ -163,6 +163,6 @@ func PostAsset(config Config) func(writer http.ResponseWriter, request *http.Req
 
 		SuccessfulResponse(writer, request, &[]byte{})
 
-		GlobalCache.Invalidate(request.URL.Path) // POST requests to this URI invalidate the cache.
+		GlobalCache.Invalidate(request.URL.Path) // POST requests to this endpoint invalidate the cache.
 	}
 }
