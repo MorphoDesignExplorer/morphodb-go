@@ -220,9 +220,10 @@ func uploadAssetS3(fileHeader *multipart.FileHeader, name string) (string, error
 	}
 
 	_, err = client.PutObject(context.TODO(), &s3.PutObjectInput{
-		Bucket: aws.String("morpho-images"),
-		Key:    aws.String(fmt.Sprintf("assets/%s%s", name, mime.Extension())),
-		Body:   file,
+		Bucket:      aws.String("morpho-images"),
+		Key:         aws.String(fmt.Sprintf("assets/%s%s", name, mime.Extension())),
+		Body:        file,
+		ContentType: aws.String(mime.String()),
 	})
 
 	return mime.Extension(), err
@@ -247,7 +248,6 @@ Hence,
 TODO: Restrict MIME types sensibly.
 
 Returns an error if any step of the process fails, and the file's extension.
-
 */
 func uploadAssetsLocal(fileHeader *multipart.FileHeader, name string) (string, error) {
 	file, err := fileHeader.Open()
@@ -341,7 +341,9 @@ func CreateAssets(db *sql.DB, filetags []ProjectAssetField, solutionId string, s
 		randomName := fmt.Sprintf("%d_%s", scopedId, randString(7))
 
 		config, err := GetConfig()
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		var extension string
 		if config.ENVIRONMENT == "prod" {

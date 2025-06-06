@@ -35,18 +35,18 @@ func (e *ExpirationDetails) Valid() bool {
 
 type ResetSessionToken struct {
 	Email      *string            `json:"reset_email"`
-Expiration *ExpirationDetails `json:"expires"`
+	Expiration *ExpirationDetails `json:"expires"`
 }
-
 
 // Permission Bit Flags for easily specifying the permissions needed for a route.
 //
 // Combine permissions needed with a pipe (|).
 type PermissionFlags int
+
 const (
-	CAN_CREATE 	PermissionFlags = 0b001	// Is the user allowed to create objects?
-	CAN_UPDATE 	PermissionFlags = 0b010	// Is the user allowed to modify objects?
-	IS_ADMIN 	PermissionFlags = 0b100	// Is the user an administrator?
+	CAN_CREATE PermissionFlags = 0b001 // Is the user allowed to create objects?
+	CAN_UPDATE PermissionFlags = 0b010 // Is the user allowed to modify objects?
+	IS_ADMIN   PermissionFlags = 0b100 // Is the user an administrator?
 )
 
 /*
@@ -60,16 +60,16 @@ type Permissions struct {
 }
 
 // Is the provided permission enough for the requirement?
-// 
+//
 // required flags if the permission is required.
-// 
+//
 // provided flags if the user has the required permission.
 func vet(required, provided bool) bool {
 	return (!required && !provided) || provided
 }
 
 func (p Permissions) HasPermission(flagSet PermissionFlags) bool {
-	return vet(CAN_CREATE & flagSet > 0, p.Create) && vet(CAN_UPDATE & flagSet > 0, p.Update) && vet(IS_ADMIN & flagSet > 0, p.IsAdmin)
+	return vet(CAN_CREATE&flagSet > 0, p.Create) && vet(CAN_UPDATE&flagSet > 0, p.Update) && vet(IS_ADMIN&flagSet > 0, p.IsAdmin)
 }
 
 type AuthToken struct {
@@ -125,8 +125,8 @@ func getEncryptionSecretParameter() ([]byte, error) {
 }
 
 type Secrets struct {
-	password   []byte	// password salt
-	encryption []byte	// encryption secret
+	password   []byte // password salt
+	encryption []byte // encryption secret
 }
 
 func (s *Secrets) Init() error {

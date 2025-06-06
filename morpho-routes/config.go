@@ -9,7 +9,7 @@ type Config struct {
 	DB_STRING               string // where is the SQLite database?
 	AWS_REGION              string // what is the aws region we're running on?
 	AWS_STORAGE_BUCKET_NAME string // what is the name of the storage bucket?
-	ENVIRONMENT           	string // are we running this server on production? (either prod or dev)
+	ENVIRONMENT             string // are we running this server on production? (either prod or dev)
 }
 
 func GetConfig() (Config, error) {
