@@ -3,9 +3,12 @@ dump.py
 __pycache__
 .env*
 *.sqlite
+*.sqlite-shm
+*.sqlite-wal
 *.db
 *.pem
 main-bin
 assets
 morphodb-go
+user-manager/user-manager
 

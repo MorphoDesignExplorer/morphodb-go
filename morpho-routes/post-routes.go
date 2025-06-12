@@ -3,6 +3,7 @@ package morphoroutes
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/gorilla/mux"
 	"mime/multipart"
 	"net/http"
 )
@@ -81,6 +82,128 @@ func PostProject(config Config) func(http.ResponseWriter, *http.Request) {
 		SuccessfulResponse(writer, request, &responseBytes)
 
 		GlobalCache.Invalidate(request.URL.Path) // POST requests to this URI invalidate the cache.
+	}
+}
+
+type UpdateProjectMetadataRequest struct {
+	VariableMetadataUnits *map[string]string `json:"variable_metadata_units"`
+	OutputMetadataUnits   *map[string]string `json:"output_metadata_units"`
+	AssetDescriptions     *map[string]string `json:"asset_descriptions"`
+	Captions              *[]Caption         `json:"captions"`
+	ProjectDescription    *string            `json:"project_description"`
+	ProjectName           *string            `json:"project_name"`
+	HumanName             *string            `json:"human_name"`
+}
+
+func UpdateProjectMetadata(config Config) func(writer http.ResponseWriter, request *http.Request) {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		db, err := StartConn(config)
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		var upmReq UpdateProjectMetadataRequest
+		dec := json.NewDecoder(request.Body)
+		err = dec.Decode(&upmReq)
+		if err != nil {
+			LogError(err)
+			HandleErrorWithMessage(writer, fmt.Errorf("Invalid JSON. Recheck request and JSON format."))
+			return
+		}
+
+		if upmReq.ProjectName == nil {
+			HandleErrorWithMessage(writer, fmt.Errorf("No project_name specified."))
+			return
+		}
+
+		project, err := GetProject(db, *upmReq.ProjectName)
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		metadata, err := GetMetadata(db, *upmReq.ProjectName)
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		changed := false
+		changedMetadata := false
+
+		if upmReq.VariableMetadataUnits != nil {
+			for idx, field := range project.VariableMetadata {
+				if unit, ok := (*upmReq.VariableMetadataUnits)[field.FieldName]; ok {
+					project.VariableMetadata[idx].FieldUnit = unit
+					changed = true
+				}
+			}
+		}
+
+		if upmReq.OutputMetadataUnits != nil {
+			for idx, field := range project.OutputMetadata {
+				if unit, ok := (*upmReq.OutputMetadataUnits)[field.FieldName]; ok {
+					project.OutputMetadata[idx].FieldUnit = unit
+					changed = true
+				}
+			}
+		}
+
+		if upmReq.AssetDescriptions != nil {
+			for idx, field := range project.Assets {
+				if description, ok := (*upmReq.AssetDescriptions)[field.Tag]; ok {
+					project.Assets[idx].Description = description
+					changed = true
+				}
+			}
+		}
+
+		if upmReq.HumanName != nil {
+			metadata.HumanName = *upmReq.HumanName
+			changedMetadata = true
+		}
+
+		if upmReq.ProjectDescription != nil {
+			metadata.Description.Text = *upmReq.ProjectDescription
+			changedMetadata = true
+		}
+
+		if upmReq.Captions != nil {
+			metadata.Captions = *upmReq.Captions
+			changedMetadata = true
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+		defer tx.Rollback()
+
+		if changed {
+			project.Update(tx)
+		}
+
+		if changedMetadata {
+			metadata.Update(tx, project.ProjectName)
+		}
+
+		err = tx.Commit()
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		msg := []byte("updated project successfully.")
+		SuccessfulResponse(writer, request, &msg)
+
+		GlobalCache.Invalidate(request.URL.Path)
 	}
 }
 
@@ -164,5 +287,69 @@ func PostAsset(config Config) func(writer http.ResponseWriter, request *http.Req
 		SuccessfulResponse(writer, request, &[]byte{})
 
 		GlobalCache.Invalidate(request.URL.Path) // POST requests to this endpoint invalidate the cache.
+	}
+}
+
+type PutDocumentRequest struct {
+	Text *string `json:"text"`
+}
+
+func PutDocument(config Config) func(writer http.ResponseWriter, request *http.Request) {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		variables := mux.Vars(request)
+
+		var docReq PutDocumentRequest
+		dec := json.NewDecoder(request.Body)
+		err := dec.Decode(&docReq)
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		idOrSlug, ok := variables["idOrSlug"]
+		if !ok {
+			HandleErrorWithMessage(writer, fmt.Errorf("Id or Slug was empty."))
+			return
+		}
+
+		if docReq.Text == nil {
+			HandleErrorWithMessage(writer, fmt.Errorf("No content was provided to update the document with."))
+			return
+		}
+
+		db, err := StartConn(config)
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		doc, err := GetDocument(tx, idOrSlug)
+		if err != nil {
+			LogError(err)
+			HandleErrorWithMessage(writer, fmt.Errorf("Could not find the document %s", idOrSlug))
+		}
+
+		err = doc.Update(tx, *docReq.Text)
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		err = tx.Commit()
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
 	}
 }

@@ -232,3 +232,57 @@ func GetSolutionsWrapper(config Config) func(http.ResponseWriter, *http.Request)
 		SuccessfulResponse(writer, request, &bytes)
 	}
 }
+
+func GetDocumentWrapper(config Config) func(http.ResponseWriter, *http.Request) {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		variables := mux.Vars(request)
+		db, err := StartConn(config)
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		var docBytes []byte
+
+		if docIdOrSlug, ok := variables["idOrSlug"]; ok {
+			doc, err := GetDocument(tx, docIdOrSlug)
+			if err != nil {
+				LogError(err)
+				HandleError(writer)
+				return
+			}
+
+			docBytes, err = json.Marshal(doc)
+			if err != nil {
+				LogError(err)
+				HandleError(writer)
+				return
+			}
+		} else {
+			docs, err := GetAllDocuments(tx)
+			if err != nil {
+				LogError(err)
+				HandleError(writer)
+				return
+			}
+
+			docBytes, err = json.Marshal(docs)
+			if err != nil {
+				LogError(err)
+				HandleError(writer)
+				return
+			}
+		}
+
+		SuccessfulResponse(writer, request, &docBytes)
+		return
+	}
+}

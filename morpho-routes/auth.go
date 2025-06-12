@@ -103,12 +103,12 @@ func LoginHandler(config Config) HandlerFunc {
 		db, err := StartConn(config)
 		user, err := GetUser(db, email[0])
 		if err != nil {
-			HandleErrorWithMessage(writer, fmt.Errorf("User or Password provided wasn't correct."))
+			HandleErrorWithMessage(writer, fmt.Errorf("Email or Password provided wasn't correct."))
 			return
 		}
 
 		if !VerifyUser(user, password[0], authState.secrets) {
-			HandleErrorWithMessage(writer, fmt.Errorf("User or Password provided wasn't correct."))
+			HandleErrorWithMessage(writer, fmt.Errorf("Email or Password provided wasn't correct."))
 			return
 		}
 
@@ -194,7 +194,6 @@ func ResetPasswordHandler(config Config) HandlerFunc {
 		if strings.Index(tokenString, "Bearer ") == 0 {
 			tokenString = tokenString[7:]
 		}
-		fmt.Println(tokenString)
 		token, err := VerifyToken[ResetSessionToken](authState.secrets, []byte(tokenString))
 		if err != nil {
 			LogError(err)

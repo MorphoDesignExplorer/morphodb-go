@@ -78,6 +78,13 @@ type Asset struct {
 	File string `json:"file" validate:"zero"`
 }
 
+// Represents a generic document on the database.
+type Document struct {
+	Id   string `json:"id" validate:"zero"`
+	Slug string `json:"slug" validate:"zero"`
+	Text string `json:"text" validate:"zero"`
+}
+
 // Common Functionality
 
 // provides different drivers depending on the build platform (windows or unix).
@@ -94,6 +101,11 @@ func StartConn(config Config) (*sql.DB, error) {
 	connString := fmt.Sprintf("file:%s?_journal:WAL", config.DB_STRING)
 
 	db, err := sql.Open(GetDriver(), connString)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = db.Exec("pragma journal_mode=wal;")
 	if err != nil {
 		return nil, err
 	}

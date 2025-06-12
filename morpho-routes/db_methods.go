@@ -78,6 +78,45 @@ func (p *Project) Create(tx *sql.Tx) error {
 }
 
 /*
+Updates a project's metadata fields, with values from the object's current fields.
+Make sure to only modify the unit fields when using this.
+
+db is the database object.
+
+Returns an error if either the object validation or the database write fails.
+*/
+func (p *Project) Update(tx *sql.Tx) error {
+	// TODO test this method
+	vm, err := json.Marshal(p.VariableMetadata)
+	if err != nil {
+		return err
+	}
+
+	om, err := json.Marshal(p.OutputMetadata)
+	if err != nil {
+		return err
+	}
+
+	as, err := json.Marshal(p.Assets)
+	if err != nil {
+		return err
+	}
+
+	// TODO test this query
+	if _, err = tx.Exec(
+		"UPDATE project SET variable_metadata = ?, output_metadata = ?, assets = ? WHERE project_name = ?",
+		string(vm),
+		string(om),
+		string(as),
+		p.ProjectName,
+	); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+/*
 	[]Solution Methods
 */
 
@@ -147,6 +186,13 @@ func GetMetadata(db *sql.DB, projectName string) (m Metadata, err error) {
 	return
 }
 
+/*
+Creates a metadata object associated with a project.
+
+db is the database object.
+
+Returns an error if either the object validation or the database write fails.
+*/
 func (m Metadata) Create(tx *sql.Tx, projectName string) error {
 	if err := Validate(m); err != nil {
 		return err
@@ -164,6 +210,39 @@ func (m Metadata) Create(tx *sql.Tx, projectName string) error {
 		m.HumanName,
 		m.Description.Slug,
 		m.Description.Text,
+	)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+/*
+Updates the captions, human_name and markdown fields of a metadata object associated with a project, with the fields of the object currently.
+
+db is the database object.
+
+Returns an error if either the object validation or the database write fails.
+*/
+func (m Metadata) Update(tx *sql.Tx, projectName string) error {
+	// TODO test this method
+	if err := Validate(m); err != nil {
+		return err
+	}
+
+	captions, err := json.Marshal(m.Captions)
+	if err != nil {
+		return err
+	}
+
+	// TODO test this query
+	_, err = tx.Exec(
+		"UPDATE metadata SET captions = ?, human_name = ?, markdown = ? WHERE project_name = ?",
+		string(captions),
+		m.HumanName,
+		m.Description.Text,
+		projectName,
 	)
 	if err != nil {
 		return err
@@ -370,6 +449,74 @@ func CreateAssets(db *sql.DB, filetags []ProjectAssetField, solutionId string, s
 	}
 
 	if err = tx.Commit(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+/*
+Document Methods
+*/
+
+// Gets all documents.
+//
+// Returns a slice of all the documents on the database.
+// Returns an error if there is a transaction error.
+func GetAllDocuments(tx *sql.Tx) (doc []Document, err error) {
+	documents := make([]Document, 0)
+	rows, err := tx.Query("SELECT id, slug, text FROM document")
+	if err != nil {
+		return nil, err
+	}
+
+	for rows.Next() {
+		var tempDoc Document
+		err = rows.Scan(&tempDoc.Id, &tempDoc.Slug, &tempDoc.Text)
+		if err != nil {
+			return nil, err
+		}
+		documents = append(documents, tempDoc)
+	}
+	return documents, nil
+}
+
+// Try to get a document by id. If that fails, try to get it by its slug.
+//
+// Return error if no Document is found. Else, return a Document.
+func GetDocument(tx *sql.Tx, idOrSlug string) (doc Document, err error) {
+	// first try
+	row := tx.QueryRow("SELECT id, slug, text FROM document WHERE id=?", idOrSlug)
+	err = row.Scan(&doc.Id, &doc.Slug, &doc.Text)
+	if err != nil {
+		// second try
+		row := tx.QueryRow("SELECT id, slug, text FROM document WHERE slug=?", idOrSlug)
+		err = row.Scan(&doc.Id, &doc.Slug, &doc.Text)
+	}
+	return
+}
+
+func (doc *Document) Create(tx *sql.Tx, slug, content string) error {
+	auuid, err := uuid.NewRandom()
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec("INSERT INTO document(id, slug, text) VALUES (?, ?, ?)",
+		auuid,
+		slug,
+		content,
+	)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (doc *Document) Update(tx *sql.Tx, content string) error {
+	_, err := tx.Exec("UPDATE document SET text = ? WHERE id = ?", content, doc.Id)
+	if err != nil {
 		return err
 	}
 
