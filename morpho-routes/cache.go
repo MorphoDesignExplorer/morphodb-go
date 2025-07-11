@@ -3,6 +3,7 @@ package morphoroutes
 import (
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -10,6 +11,7 @@ import (
 
 // in-memory cache that returns bytes corresponding to a requested path
 type Cacher struct {
+	sync.Mutex
 	directory map[string][]byte
 }
 
@@ -17,6 +19,8 @@ var GlobalCache *Cacher
 
 // Initializes the cache.
 func (c *Cacher) InitCache() {
+	c.Lock()
+	defer c.Unlock()
 	c.directory = make(map[string][]byte)
 }
 
@@ -24,6 +28,8 @@ func (c *Cacher) InitCache() {
 //
 // Returns content and true if present, else nil and false.
 func (c *Cacher) GetCached(uri string) ([]byte, bool) {
+	c.Lock()
+	defer c.Unlock()
 	item, ok := c.directory[uri]
 	if ok {
 		return item, true
@@ -34,12 +40,24 @@ func (c *Cacher) GetCached(uri string) ([]byte, bool) {
 
 // Caches content associated with a uri.
 func (c *Cacher) Cache(uri string, content []byte) {
+	c.Lock()
+	defer c.Unlock()
 	c.directory[uri] = content
 }
 
 // invalidates the content associated with a uri.
 func (c *Cacher) Invalidate(uri string) {
+	c.Lock()
+	defer c.Unlock()
 	delete(c.directory, uri)
+}
+
+func (c *Cacher) InvalidateAll() {
+	c.Lock()
+	defer c.Unlock()
+	for key := range c.directory {
+		delete(c.directory, key)
+	}
 }
 
 // Middleware to cache responses.

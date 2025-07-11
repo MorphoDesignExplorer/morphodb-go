@@ -14,12 +14,33 @@ import (
 	"math/rand"
 	"mime/multipart"
 	"os"
+	"strconv"
 	"time"
 )
 
 /*
 	Project Methods
 */
+
+func GetAllProjects(db *sql.DB) ([]Project, error) {
+	rows, err := db.Query("SELECT creation_date, project_name, variable_metadata, output_metadata, assets, deleted FROM project")
+	if err != nil {
+		return []Project{}, err
+	}
+
+	projects := make([]Project, 0)
+
+	for rows.Next() {
+		var p Project
+		err = rows.Scan(&p.CreationDate, &p.ProjectName, &p.VariableMetadata, &p.OutputMetadata, &p.Assets, &p.Deleted)
+		if err != nil {
+			return []Project{}, err
+		}
+		projects = append(projects, p)
+	}
+
+	return projects, nil
+}
 
 func GetProject(db *sql.DB, projectName string) (Project, error) {
 	if row, err := db.Query(
@@ -120,6 +141,25 @@ func (p *Project) Update(tx *sql.Tx) error {
 	[]Solution Methods
 */
 
+func GetAllSolutions(tx *sql.Tx, projectName string) ([]Solution, error) {
+	solutions := make([]Solution, 0)
+	rows, err := tx.Query("SELECT id, scoped_id, parameters, output_parameters FROM solution");
+	if err != nil {
+		return nil, err
+	}
+
+	for rows.Next() {
+		var tempSolution Solution
+		err = rows.Scan(&tempSolution.Id, &tempSolution.ScopedId, &tempSolution.Parameter, &tempSolution.OutputParameter)
+		if err != nil {
+			return nil, err
+		}
+		solutions = append(solutions, tempSolution)
+	}
+
+	return solutions, nil
+}
+
 /*
 Saves a list of Solution objects under a projectName.
 
@@ -156,12 +196,17 @@ func (s SolutionSet) Create(tx *sql.Tx, projectName string) error {
 			return err
 		}
 
+		scopedId, err := strconv.ParseInt(solution.ScopedId, 10, 32)
+		if err != nil {
+			return err
+		}
+
 		_, err = stmt.Exec(
 			solution.Id,
 			string(iparam),
 			string(oparam),
 			projectName,
-			solution.ScopedId,
+			scopedId,
 		)
 		if err != nil {
 			return err
@@ -194,9 +239,9 @@ db is the database object.
 Returns an error if either the object validation or the database write fails.
 */
 func (m Metadata) Create(tx *sql.Tx, projectName string) error {
-	if err := Validate(m); err != nil {
-		return err
-	}
+	// if err := Validate(m); err != nil {
+	// return err
+	// }
 
 	captions, err := json.Marshal(m.Captions)
 	if err != nil {
@@ -226,17 +271,11 @@ db is the database object.
 Returns an error if either the object validation or the database write fails.
 */
 func (m Metadata) Update(tx *sql.Tx, projectName string) error {
-	// TODO test this method
-	if err := Validate(m); err != nil {
-		return err
-	}
-
 	captions, err := json.Marshal(m.Captions)
 	if err != nil {
 		return err
 	}
 
-	// TODO test this query
 	_, err = tx.Exec(
 		"UPDATE metadata SET captions = ?, human_name = ?, markdown = ? WHERE project_name = ?",
 		string(captions),
@@ -377,6 +416,20 @@ func randString(length int) string {
 	return string(randPart)
 }
 
+func (a *Asset) Create(tx *sql.Tx, solutionId string) error {
+	auuid, err := uuid.NewRandom()
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec("INSERT INTO asset (id, file, tag, solution_id) VALUES (?, ?, ?, ?)", auuid, a.File, a.Tag, solutionId)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 /*
 Uploads the provided assets to S3 or the local filesystem and adds records into the database.
 
@@ -465,14 +518,14 @@ Document Methods
 // Returns an error if there is a transaction error.
 func GetAllDocuments(tx *sql.Tx) (doc []Document, err error) {
 	documents := make([]Document, 0)
-	rows, err := tx.Query("SELECT id, slug, text FROM document")
+	rows, err := tx.Query("SELECT id, slug, text, title, parent, timestamp FROM document")
 	if err != nil {
 		return nil, err
 	}
 
 	for rows.Next() {
 		var tempDoc Document
-		err = rows.Scan(&tempDoc.Id, &tempDoc.Slug, &tempDoc.Text)
+		err = rows.Scan(&tempDoc.Id, &tempDoc.Slug, &tempDoc.Text, &tempDoc.Title, &tempDoc.Parent, &tempDoc.Timestamp)
 		if err != nil {
 			return nil, err
 		}
@@ -486,26 +539,28 @@ func GetAllDocuments(tx *sql.Tx) (doc []Document, err error) {
 // Return error if no Document is found. Else, return a Document.
 func GetDocument(tx *sql.Tx, idOrSlug string) (doc Document, err error) {
 	// first try
-	row := tx.QueryRow("SELECT id, slug, text FROM document WHERE id=?", idOrSlug)
-	err = row.Scan(&doc.Id, &doc.Slug, &doc.Text)
+	row := tx.QueryRow("SELECT id, slug, text, title, parent, timestamp FROM document WHERE id=?", idOrSlug)
+	err = row.Scan(&doc.Id, &doc.Slug, &doc.Text, &doc.Title, &doc.Parent, &doc.Timestamp)
 	if err != nil {
 		// second try
-		row := tx.QueryRow("SELECT id, slug, text FROM document WHERE slug=?", idOrSlug)
-		err = row.Scan(&doc.Id, &doc.Slug, &doc.Text)
+		row := tx.QueryRow("SELECT id, slug, text, title, parent, timestamp FROM document WHERE slug=?", idOrSlug)
+		err = row.Scan(&doc.Id, &doc.Slug, &doc.Text, &doc.Title, &doc.Parent, &doc.Timestamp)
 	}
 	return
 }
 
-func (doc *Document) Create(tx *sql.Tx, slug, content string) error {
+func (doc *Document) Create(tx *sql.Tx, slug, content, title, parent string) error {
 	auuid, err := uuid.NewRandom()
 	if err != nil {
 		return err
 	}
 
-	_, err = tx.Exec("INSERT INTO document(id, slug, text) VALUES (?, ?, ?)",
+	_, err = tx.Exec("INSERT INTO document(id, slug, text, title, parent, timestamp) VALUES (?, ?, ?, ?, ?, date('now'))",
 		auuid,
 		slug,
 		content,
+		title,
+		parent,
 	)
 	if err != nil {
 		return err
@@ -514,11 +569,19 @@ func (doc *Document) Create(tx *sql.Tx, slug, content string) error {
 	return nil
 }
 
-func (doc *Document) Update(tx *sql.Tx, content string) error {
-	_, err := tx.Exec("UPDATE document SET text = ? WHERE id = ?", content, doc.Id)
+func (doc *Document) Update(tx *sql.Tx, content, title, parent string) error {
+	_, err := tx.Exec("UPDATE document SET text = ?, title = ?, parent = ? WHERE id = ?", content, title, parent, doc.Id)
 	if err != nil {
 		return err
 	}
 
+	return nil
+}
+
+func (doc *Document) Delete(tx *sql.Tx) error {
+	_, err := tx.Exec("DELETE FROM document WHERE id = ?", doc.Id)
+	if err != nil {
+		return err
+	}
 	return nil
 }

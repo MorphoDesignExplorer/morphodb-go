@@ -80,9 +80,12 @@ type Asset struct {
 
 // Represents a generic document on the database.
 type Document struct {
-	Id   string `json:"id" validate:"zero"`
-	Slug string `json:"slug" validate:"zero"`
-	Text string `json:"text" validate:"zero"`
+	Id        string `json:"id" validate:"zero"`
+	Slug      string `json:"slug" validate:"zero"`
+	Text      string `json:"text" validate:"zero"`
+	Title     string `json:"title" validate:"zero"`
+	Parent    string `json:"parent"`
+	Timestamp string `json:"timestamp"`
 }
 
 // Common Functionality

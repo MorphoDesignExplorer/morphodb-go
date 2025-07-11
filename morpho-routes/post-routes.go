@@ -17,6 +17,27 @@ type PostProjectRequest struct {
 	Project  Project     `json:"project"`
 }
 
+func PostProjectZip(config Config) func(http.ResponseWriter, *http.Request) {
+	reportError := func(err error, writer http.ResponseWriter, communicate bool) {
+		if communicate {
+			HandleErrorWithMessage(writer, err)
+		} else {
+			HandleError(writer)
+		}
+	}
+	return func(writer http.ResponseWriter, request *http.Request) {
+		err := UploadProject(config)
+		if err != nil {
+			LogError(err)
+			reportError(err, writer, true)
+		}
+
+		response := []byte("ok")
+		SuccessfulResponse(writer, request, &response)
+		GlobalCache.InvalidateAll()
+	}
+}
+
 // Endpoint that takes a CSV with a project's solutions and uploads it to the database.
 func PostProject(config Config) func(http.ResponseWriter, *http.Request) {
 	reportError := func(err error, writer http.ResponseWriter, communicate bool) {
@@ -81,7 +102,9 @@ func PostProject(config Config) func(http.ResponseWriter, *http.Request) {
 
 		SuccessfulResponse(writer, request, &responseBytes)
 
-		GlobalCache.Invalidate(request.URL.Path) // POST requests to this URI invalidate the cache.
+		GlobalCache.InvalidateAll()
+
+		// GlobalCache.Invalidate(request.URL.Path) // POST requests to this URI invalidate the cache.
 	}
 }
 
@@ -203,7 +226,8 @@ func UpdateProjectMetadata(config Config) func(writer http.ResponseWriter, reque
 		msg := []byte("updated project successfully.")
 		SuccessfulResponse(writer, request, &msg)
 
-		GlobalCache.Invalidate(request.URL.Path)
+		GlobalCache.InvalidateAll()
+		// GlobalCache.Invalidate(request.URL.Path)
 	}
 }
 
@@ -291,7 +315,9 @@ func PostAsset(config Config) func(writer http.ResponseWriter, request *http.Req
 }
 
 type PutDocumentRequest struct {
-	Text *string `json:"text"`
+	Text   *string `json:"text"`
+	Title  *string `json:"title"`
+	Parent *string `json:"parent"`
 }
 
 func PutDocument(config Config) func(writer http.ResponseWriter, request *http.Request) {
@@ -318,6 +344,16 @@ func PutDocument(config Config) func(writer http.ResponseWriter, request *http.R
 			return
 		}
 
+		if docReq.Title == nil {
+			HandleErrorWithMessage(writer, fmt.Errorf("No title was provided for the document."))
+			return
+		}
+
+		if docReq.Parent == nil {
+			emptyString := ""
+			docReq.Parent = &emptyString
+		}
+
 		db, err := StartConn(config)
 		if err != nil {
 			LogError(err)
@@ -338,7 +374,128 @@ func PutDocument(config Config) func(writer http.ResponseWriter, request *http.R
 			HandleErrorWithMessage(writer, fmt.Errorf("Could not find the document %s", idOrSlug))
 		}
 
-		err = doc.Update(tx, *docReq.Text)
+		err = doc.Update(tx, *docReq.Text, *docReq.Title, *docReq.Parent)
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		err = tx.Commit()
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+	}
+}
+
+type PostDocumentRequest struct {
+	Slug   *string `json:"slug"`
+	Text   *string `json:"text"`
+	Title  *string `json:"title"`
+	Parent *string `json:"parent"`
+}
+
+func PostDocument(config Config) func(writer http.ResponseWriter, request *http.Request) {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		var docReq PostDocumentRequest
+		dec := json.NewDecoder(request.Body)
+		err := dec.Decode(&docReq)
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		if docReq.Slug == nil {
+			HandleErrorWithMessage(writer, fmt.Errorf("Slug is empty."))
+			return
+		}
+
+		if docReq.Text == nil {
+			HandleErrorWithMessage(writer, fmt.Errorf("No content was provided to update the document with."))
+			return
+		}
+
+		if docReq.Title == nil {
+			HandleErrorWithMessage(writer, fmt.Errorf("No title was provided for the document."))
+			return
+		}
+
+		if docReq.Parent == nil {
+			emptyString := ""
+			docReq.Parent = &emptyString
+		}
+
+		db, err := StartConn(config)
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		doc := Document{}
+
+		err = doc.Create(tx, *docReq.Slug, *docReq.Text, *docReq.Title, *docReq.Parent)
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		err = tx.Commit()
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+	}
+}
+
+func DeleteDocument(config Config) func(writer http.ResponseWriter, request *http.Request) {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		variables := mux.Vars(request)
+		idOrSlug, ok := variables["idOrSlug"]
+		if !ok {
+			HandleErrorWithMessage(writer, fmt.Errorf("Id or Slug was empty."))
+			return
+		}
+
+		if idOrSlug == "Front Matter" {
+			HandleErrorWithMessage(writer, fmt.Errorf("Cannot delete front matter."))
+			return
+		}
+
+		db, err := StartConn(config)
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		doc, err := GetDocument(tx, idOrSlug)
+		if err != nil {
+			LogError(err)
+			HandleError(writer)
+			return
+		}
+
+		err = doc.Delete(tx)
 		if err != nil {
 			LogError(err)
 			HandleError(writer)

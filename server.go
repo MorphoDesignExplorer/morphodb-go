@@ -29,13 +29,14 @@ func setupDB() error {
 
 	queries := []string{
 		"CREATE TABLE IF NOT EXISTS project (creation_date date not null, project_name text primary key, variable_metadata jsonb not null, output_metadata jsonb not null, assets jsonb, deleted integer not null)",
-		"CREATE TABLE IF NOT EXISTS document (id text primary key, slug text NOT NULL, text text NOT NULL)",
+		"CREATE TABLE IF NOT EXISTS document (id text primary key, slug text NOT NULL, text text NOT NULL, title text NOT NULL, parent text, timestamp date)",
 		"CREATE TABLE IF NOT EXISTS solution (id text primary key, parameters jsonb not null, output_parameters jsonb, project_name text not null, scoped_id integer, foreign key(project_name) references project(project_name));",
 		"CREATE INDEX IF NOT EXISTS solution_to_project on solution(project_name);",
 		"CREATE TABLE IF NOT EXISTS asset(id text, file text, tag text, solution_id integer, foreign key(solution_id) references solution(id), PRIMARY KEY (solution_id, tag));",
 		"CREATE INDEX IF NOT EXISTS asset_id on asset(id)",
 		"CREATE INDEX IF NOT EXISTS reverse_solution on asset(solution_id);",
 		"CREATE TABLE IF NOT EXISTS metadata (project_name text primary key, captions jsonb, human_name text, slug text, markdown text, foreign key(project_name) references project(project_name));",
+		"INSERT OR IGNORE INTO document (id, slug, text, title, parent, timestamp) VALUES ('0f6edea0-498d-430c-bf25-6a7b93d30a9c', 'Front Matter', '', 'Front Matter', '', time('now'));",
 	}
 
 	for _, query := range queries {
@@ -110,12 +111,12 @@ func SetupRouter() *mux.Router {
 	dataRouter.HandleFunc("/", multiplexRoute(
 		map[string]morphoroutes.HandlerFunc{
 			"GET":  morphoroutes.GetProjectsWrapper(config),
-			"POST": morphoroutes.AuthenticatedMiddleware(morphoroutes.PostProject(config), morphoroutes.CAN_CREATE),
+			"POST": (morphoroutes.PostProjectZip(config)), // TODO add authentication middleware
 			"PUT":  morphoroutes.AuthenticatedMiddleware(morphoroutes.UpdateProjectMetadata(config), morphoroutes.CAN_UPDATE),
 		},
 	)).Methods("GET", "POST", "PUT")
 
-	dataRouter.HandleFunc("/{project}/", morphoroutes.GetProjectsWrapper(config)).Methods("GET")
+	dataRouter.HandleFunc("/{project}/", morphoroutes.GetProjectsWrapper(config)).Methods("GET", "POST")
 	dataRouter.HandleFunc("/{project}/model/", morphoroutes.GetSolutionsWrapper(config)).Methods("GET")
 	dataRouter.HandleFunc("/{project}/model/{solution}/", multiplexRoute(
 		map[string]morphoroutes.HandlerFunc{
@@ -125,13 +126,19 @@ func SetupRouter() *mux.Router {
 	)).Methods("GET", "POST")
 
 	documentRouter := topRouter.PathPrefix("/document").Subrouter()
-	documentRouter.HandleFunc("/", morphoroutes.GetDocumentWrapper(config)).Methods("GET")
+	documentRouter.HandleFunc("/", multiplexRoute(
+		map[string]morphoroutes.HandlerFunc {
+			"GET": morphoroutes.GetDocumentWrapper(config),
+			"POST": morphoroutes.AuthenticatedMiddleware(morphoroutes.PostDocument(config), morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE),
+		},
+	)).Methods("GET", "POST")
 	documentRouter.HandleFunc("/{idOrSlug}/", multiplexRoute(
 		map[string]morphoroutes.HandlerFunc{
 			"GET": morphoroutes.GetDocumentWrapper(config),
-			"PUT": morphoroutes.PutDocument(config),
+			"PUT": morphoroutes.AuthenticatedMiddleware(morphoroutes.PutDocument(config), morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE),
+			"DELETE": morphoroutes.AuthenticatedMiddleware(morphoroutes.DeleteDocument(config), morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE),
 		},
-	)).Methods("GET", "PUT")
+	)).Methods("GET", "PUT", "DELETE")
 
 	authRouter := topRouter.PathPrefix("/auth").Subrouter()
 	authRouter.Use(FilterMethodsMiddleware([]string{"POST"}))
