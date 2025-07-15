@@ -19,19 +19,17 @@ type PostProjectRequest struct {
 	Project  Project     `json:"project"`
 }
 
-func (config Config) PostProjectZip() func(http.ResponseWriter, *http.Request) {
+func (service Service) PostProjectZip() func(http.ResponseWriter, *http.Request) {
 	return func(writer http.ResponseWriter, request *http.Request) {
-		err := UploadProject(config)
+		err := UploadProject(service)
 		if err != nil {
-			var a APIError
-			if err != nil {
-				if errors.As(err, a) {
-					HandleAPIError(writer, a)
-				} else {
-					// unknown error at this point
-					LogError(err)
-					HandleError(writer)
-				}
+			apiError := &APIError{}
+			if errors.As(err, apiError) {
+				HandleAPIError(writer, request, *apiError)
+			} else {
+				// unknown error at this point
+				LogError(err)
+				HandleError(writer)
 			}
 		}
 
@@ -41,7 +39,7 @@ func (config Config) PostProjectZip() func(http.ResponseWriter, *http.Request) {
 }
 
 // Endpoint that takes a CSV with a project's solutions and uploads it to the database.
-func (config Config) PostProject() *Endpoint {
+func (service Service) PostProject() *Endpoint {
 	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		var data PostProjectRequest
 		dec := json.NewDecoder(request.Body)
@@ -50,7 +48,7 @@ func (config Config) PostProject() *Endpoint {
 			return APIError{http.StatusBadRequest, JSON_UNMARSHAL_ERROR, NewServerError(err)}
 		}
 
-		db, err := config.GetDB()
+		db, err := service.GetDB()
 		if err != nil {
 			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
@@ -91,7 +89,7 @@ func (config Config) PostProject() *Endpoint {
 	})
 }
 
-func (config Config) UpdateProjectMetadata() *Endpoint {
+func (service Service) UpdateProjectMetadata() *Endpoint {
 
 	type UpdateProjectMetadataRequest struct {
 		VariableMetadataUnits *map[string]string `json:"variable_metadata_units"`
@@ -104,7 +102,7 @@ func (config Config) UpdateProjectMetadata() *Endpoint {
 	}
 
 	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
-		db, err := StartConn(config)
+		db, err := StartConn(service)
 		if err != nil {
 			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
@@ -204,7 +202,7 @@ func (config Config) UpdateProjectMetadata() *Endpoint {
 }
 
 // Endpoint that uploads one or more images with attached tags for a particular solution, to S3.
-func (config Config) PostAsset() *Endpoint {
+func (service Service) PostAsset() *Endpoint {
 
 	type PostAssetRequest struct {
 		Asset Asset `json:"asset"`
@@ -218,7 +216,7 @@ func (config Config) PostAsset() *Endpoint {
 			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
-		db, err := StartConn(config)
+		db, err := StartConn(service)
 		if err != nil {
 			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
@@ -274,7 +272,7 @@ func (config Config) PostAsset() *Endpoint {
 	})
 }
 
-func (config Config) PutDocument() *Endpoint {
+func (service Service) PutDocument() *Endpoint {
 
 	type PutDocumentRequest struct {
 		Text   *string `json:"text"`
@@ -313,7 +311,7 @@ func (config Config) PutDocument() *Endpoint {
 			docReq.Parent = &emptyString
 		}
 
-		db, err := StartConn(config)
+		db, err := StartConn(service)
 		if err != nil {
 			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
@@ -344,7 +342,7 @@ func (config Config) PutDocument() *Endpoint {
 	})
 }
 
-func (config Config) PostDocument() *Endpoint {
+func (service Service) PostDocument() *Endpoint {
 
 	type PostDocumentRequest struct {
 		Slug   *string `json:"slug"`
@@ -381,7 +379,7 @@ func (config Config) PostDocument() *Endpoint {
 			docReq.Parent = &emptyString
 		}
 
-		db, err := StartConn(config)
+		db, err := StartConn(service)
 		if err != nil {
 			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
@@ -408,7 +406,7 @@ func (config Config) PostDocument() *Endpoint {
 	})
 }
 
-func (config Config) DeleteDocument() *Endpoint {
+func (service Service) DeleteDocument() *Endpoint {
 	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		variables := mux.Vars(request)
 		idOrSlug, ok := variables["idOrSlug"]
@@ -422,7 +420,7 @@ func (config Config) DeleteDocument() *Endpoint {
 			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
-		db, err := StartConn(config)
+		db, err := StartConn(service)
 		if err != nil {
 			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}

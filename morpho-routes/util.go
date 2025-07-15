@@ -22,11 +22,11 @@ type APIMessage struct {
 // writer: a handler to a ResponseWriter
 //
 // err: An error to be communicated with the user.
-func HandleAPIError(writer http.ResponseWriter, err APIError) {
-	// log the error
-	log.Printf(err.serverError.Error())
-
+func HandleAPIError(writer http.ResponseWriter, request *http.Request, err APIError) {
 	// write error message to console
+	log.Printf("%s: Error Trace (%s) %s", request.URL.Path, err.Message, err.serverError.Error())
+
+	// return the API error message message
 	writer.Header().Add("Content-Type", "application/json")
 	writer.WriteHeader(err.StatusCode)
 	json.NewEncoder(writer).Encode(err)
@@ -53,7 +53,25 @@ type ServerError struct {
 }
 
 func (s ServerError) Error() string {
-	return fmt.Sprintf("[%s] \"%s\" --> %s", s.location, s.functionName, s.item)
+	return fmt.Sprintf("\n[%s] @ %s: %s", s.functionName, s.location, s.item)
+}
+
+func (s ServerError) Unwrap() (list []error) {
+	list = make([]error, 0)
+
+	currentItem := s.item
+
+	serverError := &ServerError{}
+	for errors.As(currentItem, serverError) {
+		list = append(list, serverError)
+		currentItem = serverError.item
+	}
+
+	if currentItem != nil {
+		list = append(list, currentItem)
+	}
+
+	return list
 }
 
 func NewServerError(e error) ServerError {
@@ -73,7 +91,11 @@ type APIError struct {
 }
 
 func (a APIError) Error() string {
-	return fmt.Sprintf("%d: %s :: %s", a.StatusCode, a.Message, &a.serverError)
+	return fmt.Sprintf("\n%s\n%s", a.Message, &a.serverError)
+}
+
+func (a APIError) Unwrap() (list []error) {
+	return a.serverError.Unwrap()
 }
 
 // Logs an error generated at a particular position to the logging module.
@@ -137,11 +159,11 @@ func (e *Endpoint) AddMiddleware(middleware func(http.HandlerFunc) http.HandlerF
 func (e *Endpoint) Finalize() http.HandlerFunc {
 	finalHandler := func(w http.ResponseWriter, r *http.Request) {
 		err := e.BaseHandler(w, r)
-		var a APIError
+		apiError := &APIError{}
 
 		if err != nil {
-			if errors.As(err, a) {
-				HandleAPIError(w, a)
+			if errors.As(err, apiError) {
+				HandleAPIError(w, r, *apiError)
 			} else {
 				// unknown error at this point
 				LogError(err)

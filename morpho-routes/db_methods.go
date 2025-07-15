@@ -113,7 +113,6 @@ db is the database object.
 Returns an error if either the object validation or the database write fails.
 */
 func (p *Project) Update(tx *sql.Tx) error {
-	// TODO test this method
 	vm, err := json.Marshal(p.VariableMetadata)
 	if err != nil {
 		return err
@@ -129,7 +128,6 @@ func (p *Project) Update(tx *sql.Tx) error {
 		return err
 	}
 
-	// TODO test this query
 	if _, err = tx.Exec(
 		"UPDATE project SET variable_metadata = ?, output_metadata = ?, assets = ? WHERE project_name = ?",
 		string(vm),
@@ -478,7 +476,7 @@ func CreateAssets(db *sql.DB, filetags []ProjectAssetField, solutionId string, s
 
 		randomName := fmt.Sprintf("%d_%s", scopedId, randString(7))
 
-		config, err := GetConfig()
+		config, err := StartService()
 		if err != nil {
 			return err
 		}

@@ -8,12 +8,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"io"
 	"slices"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 )
 
 // Data Types
@@ -132,12 +133,12 @@ type Secrets struct {
 func (s *Secrets) Init() error {
 	var err error
 
-	config, err := GetConfig()
+	service, err := StartService()
 	if err != nil {
 		return err
 	}
 
-	if config.ENVIRONMENT == "prod" {
+	if service.ENVIRONMENT == "prod" {
 		s.encryption, err = getEncryptionSecretParameter()
 		if err != nil {
 			return err

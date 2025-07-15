@@ -48,7 +48,10 @@ func MakeTree(zippath string) (map[string]FileTuple, error) {
 func unpackItem(file *zip.File, dirname string) (filename string, err error) {
 	filename = "./" + path.Join(dirname, "solutions.db")
 	fileHandle, err := os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0777)
-	defer fileHandle.Close()
+	defer func() {
+		err = fileHandle.Close()
+	}()
+
 	if err != nil {
 		return "", err
 	}
@@ -120,7 +123,7 @@ func unpackAndUploadToLocal(file *zip.File, name string) (string, error) {
 		n, err := writeHandle.Write(contents)
 		if n != len(contents) || err != nil {
 			return "", NewServerError(
-				fmt.Errorf("could not write complete file: %w", err.Error()),
+				fmt.Errorf("could not write complete file: %w", err),
 			)
 		}
 		return mime.Extension(), nil
@@ -172,7 +175,7 @@ func ClearWD() error {
 	return nil
 }
 
-func UploadProject(config Config) (err error) {
+func UploadProject(service Service) (err error) {
 	tree, err := MakeTree("./test.zip")
 	if err != nil {
 		return APIError{http.StatusInternalServerError, "Could not open zip file for reading.", NewServerError(err)}
@@ -206,7 +209,7 @@ func UploadProject(config Config) (err error) {
 		return APIError{http.StatusInternalServerError, "Could not access imported database.", NewServerError(err)}
 	}
 
-	realdb, err := StartConn(config)
+	realdb, err := StartConn(service)
 	if err != nil {
 		return APIError{http.StatusInternalServerError, "Could not access internal database.", NewServerError(err)}
 	}

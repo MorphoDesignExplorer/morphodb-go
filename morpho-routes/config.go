@@ -6,19 +6,19 @@ import (
 	"os"
 )
 
-type Config struct {
+type Service struct {
 	DB_STRING               string // where is the SQLite database?
 	AWS_REGION              string // what is the aws region we're running on?
 	AWS_STORAGE_BUCKET_NAME string // what is the name of the storage bucket?
 	ENVIRONMENT             string // are we running this server on production? (either prod or dev)
 }
 
-func (c *Config) GetDB() (*sql.DB, error) {
+func (c *Service) GetDB() (*sql.DB, error) {
 	return StartConn(*c)
 }
 
-func GetConfig() (Config, error) {
-	result := Config{}
+func StartService() (Service, error) {
+	result := Service{}
 	result.DB_STRING = os.Getenv("DB_STRING")
 	if len(result.DB_STRING) == 0 {
 		return result, errors.New("DB_STRING was not set")

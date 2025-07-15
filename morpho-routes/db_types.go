@@ -100,8 +100,8 @@ func GetDriver() string {
 }
 
 // Starts and returns a SQLite DB connection.
-func StartConn(config Config) (*sql.DB, error) {
-	connString := fmt.Sprintf("file:%s?_journal:WAL", config.DB_STRING)
+func StartConn(service Service) (*sql.DB, error) {
+	connString := fmt.Sprintf("file:%s?_journal:WAL", service.DB_STRING)
 
 	db, err := sql.Open(GetDriver(), connString)
 	if err != nil {

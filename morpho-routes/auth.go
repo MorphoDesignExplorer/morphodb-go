@@ -82,7 +82,7 @@ Route for a login process. Takes an email and password and returns an encrypted 
 
 The token should expire in 30 days.
 */
-func (config *Config) LoginEndpoint() *Endpoint {
+func (service Service) LoginEndpoint() *Endpoint {
 	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		authState.Init()
 		request.ParseForm()
@@ -100,7 +100,7 @@ func (config *Config) LoginEndpoint() *Endpoint {
 		}
 
 		// check if password hash matches
-		db, err := config.GetDB()
+		db, err := service.GetDB()
 		user, err := GetUser(db, email[0])
 		if err != nil {
 			err := fmt.Errorf("Email or Password provided wasn't correct.")
@@ -138,7 +138,7 @@ and an otp in the form section.
 
 Returns an encrypted authorization JWT.
 */
-func (config Config) VerifyLoginEndpoint() *Endpoint {
+func (service Service) VerifyLoginEndpoint() *Endpoint {
 	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		authState.Init()
 		bytes, err := io.ReadAll(request.Body)
@@ -170,7 +170,7 @@ Takes an email, and sends a reset request to the email if it exists.
 
 Rate limit this route, but not transparently.
 */
-func (config Config) InitiateResetPasswordEndpoint() *Endpoint {
+func (service Service) InitiateResetPasswordEndpoint() *Endpoint {
 	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		// TODO implement this after acquiring a domain.
 		authState.Init()
@@ -189,7 +189,7 @@ Takes a reset session token in the URL parameter section, and a password in the 
 
 Once the password is reset, invalidate the password reset session token.
 */
-func (config *Config) ResetPasswordEndpoint() *Endpoint {
+func (service Service) ResetPasswordEndpoint() *Endpoint {
 	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		var err error
 		authState.Init()
@@ -215,7 +215,7 @@ func (config *Config) ResetPasswordEndpoint() *Endpoint {
 			return APIError{http.StatusBadRequest, "Could not parse form data.", NewServerError(err)}
 		}
 
-		db, err := config.GetDB()
+		db, err := service.GetDB()
 		if err != nil {
 			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
