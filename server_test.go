@@ -3,14 +3,15 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	morphoroutes "github.com/MorphoDesignExplorer/morphodb-go/morpho-routes"
-	"github.com/gorilla/mux"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"reflect"
 	"testing"
+
+	morphoroutes "github.com/MorphoDesignExplorer/morphodb-go/morpho-routes"
+	"github.com/gorilla/mux"
 )
 
 func init() {
@@ -42,7 +43,7 @@ func TestProjectEndpoint(t *testing.T) {
 	t.Run("TestProjectEndpoint", func(t *testing.T) {
 		config := mockConfig()
 
-		getProjects := morphoroutes.GetProjectsWrapper(config)
+		getProjects := config.GetProjectEndpoint().Finalize()
 
 		request, _ := http.NewRequest(http.MethodGet, "/project/", nil)
 		response := httptest.NewRecorder()
@@ -107,7 +108,7 @@ func TestSolutionEndpoint(t *testing.T) {
 
 			request = mux.SetURLVars(request, variables)
 
-			getSolutions := morphoroutes.GetSolutionsWrapper(config)
+			getSolutions := config.GetSolutionEndpoint().Finalize()
 			getSolutions(response, request)
 
 			fileBytes, err := getFileBytes(fmt.Sprintf("./tests/model_%s.json", endpoint))

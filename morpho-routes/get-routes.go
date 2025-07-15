@@ -4,62 +4,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
-	"runtime"
 
 	_ "github.com/glebarez/go-sqlite" // pure go driver for windows platforms
 	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3" // go driver for linux platforms
 )
-
-type ErrorMessage struct {
-	Message string `json:"message"`
-}
-
-// Writes a 500 to the output stream.
-//
-// The calling route should return after invoking this function.
-//
-// Parameters:
-//
-// writer: a handler to a Response Writer
-func HandleError(writer http.ResponseWriter) {
-	writer.Header().Add("Content-Type", "application/json")
-	writer.WriteHeader(http.StatusInternalServerError)
-	json.NewEncoder(writer).Encode(ErrorMessage{"Internal Server Error"})
-}
-
-// Writes a 500 to the output stream, with  a custom error message.
-//
-// The calling route should return after invoking this function.
-//
-// Parameters:
-//
-// writer: a handler to a ResponseWriter
-//
-// err: An error to be communicated with the user.
-func HandleErrorWithMessage(writer http.ResponseWriter, err error) {
-	writer.Header().Add("Content-Type", "application/json")
-	writer.WriteHeader(http.StatusInternalServerError)
-	json.NewEncoder(writer).Encode(ErrorMessage{err.Error()})
-}
-
-// Logs an error generated at a particular position to the logging module.
-func LogError(err error) {
-	programCounter, file, lineNumber, ok := runtime.Caller(1) // get information about caller
-	if ok {
-		log.Printf("[%s] \"%s\" --> %s:%d", runtime.FuncForPC(programCounter).Name(), err, file, lineNumber)
-	}
-}
-
-// Writes headers to signify a successful response, and then writes the content to a response stream.
-func SuccessfulResponse(writer http.ResponseWriter, request *http.Request, content *([]byte)) {
-	GlobalCache.Cache(request.URL.Path, *content)
-	writer.Header().Add("Content-Type", "application/json")
-	writer.WriteHeader(http.StatusOK)
-	writer.Write(*content)
-}
 
 // Fetches all the projects or a singular project.
 //
@@ -131,8 +81,7 @@ func GetSolutions(variables map[string]string, config Config, urlGenerator func(
 
 	db, err := StartConn(config)
 	if err != nil {
-		LogError(err)
-		return nil, err
+		return nil, NewServerError(err)
 	}
 	defer db.Close()
 
@@ -143,8 +92,7 @@ func GetSolutions(variables map[string]string, config Config, urlGenerator func(
 		result, err = db.Query(broadQuery, projectName)
 	}
 	if err != nil {
-		LogError(err)
-		return nil, err
+		return nil, NewServerError(err)
 	}
 	defer result.Close()
 
@@ -155,8 +103,7 @@ func GetSolutions(variables map[string]string, config Config, urlGenerator func(
 
 		err = result.Scan(&tempSolution.Id, &tempSolution.ScopedId, &tempSolution.Parameter, &tempSolution.OutputParameter, &fileTag, &fileUri)
 		if err != nil {
-			LogError(err)
-			return nil, err
+			return nil, NewServerError(err)
 		}
 
 		fileUri = urlGenerator(fileUri)
@@ -184,24 +131,23 @@ func GetSolutions(variables map[string]string, config Config, urlGenerator func(
 // config is the set of environment variables needed to serve the request.
 //
 // Returns an HTTP handler for the GetProjects route.
-func GetProjectsWrapper(config Config) func(http.ResponseWriter, *http.Request) {
-	return func(writer http.ResponseWriter, request *http.Request) {
+func (config Config) GetProjectEndpoint() *Endpoint {
+	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		variables := mux.Vars(request) // map that may or may not have the key 'project'
 		projectSet, err := GetProjects(variables, config)
 		if err != nil {
-			HandleError(writer)
-			return
+			return &APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
 		bytes, err := json.Marshal(projectSet)
 		if err != nil {
-			HandleError(writer)
-			return
+			return &APIError{http.StatusInternalServerError, JSON_MARSHAL_ERROR, NewServerError(err)}
 		}
 
 		GlobalCache.Cache(request.URL.Path, bytes)
-		SuccessfulResponse(writer, request, &bytes)
-	}
+		SuccessfulResponse(writer, request, bytes)
+		return nil
+	})
 }
 
 // GET method that returns either a singular solution or all the solutions associated with a project.
@@ -209,45 +155,40 @@ func GetProjectsWrapper(config Config) func(http.ResponseWriter, *http.Request) 
 // config is the set of environment variables needed to serve the request.
 //
 // Returns an HTTP handler for the GetSolutions route.
-func GetSolutionsWrapper(config Config) func(http.ResponseWriter, *http.Request) {
+func (config Config) GetSolutionEndpoint() *Endpoint {
 	urlGenerator := func(filename string) string {
 		return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", config.AWS_STORAGE_BUCKET_NAME, config.AWS_REGION, filename)
 	}
 
-	return func(writer http.ResponseWriter, request *http.Request) {
+	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		variables := mux.Vars(request) // map that has the key 'project' and may or may not have the key 'solution'
 		solutionSet, err := GetSolutions(variables, config, urlGenerator)
 		if err != nil {
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
 		bytes, err := json.Marshal(solutionSet)
 		if err != nil {
-			HandleError(writer)
-			return
+			return &APIError{http.StatusInternalServerError, JSON_MARSHAL_ERROR, NewServerError(err)}
 		}
 
 		GlobalCache.Cache(request.URL.Path, bytes)
-		SuccessfulResponse(writer, request, &bytes)
-	}
+		SuccessfulResponse(writer, request, bytes)
+		return nil
+	})
 }
 
-func GetDocumentWrapper(config Config) func(http.ResponseWriter, *http.Request) {
-	return func(writer http.ResponseWriter, request *http.Request) {
+func (config Config) GetDocumentEndpoint() *Endpoint {
+	method := func(writer http.ResponseWriter, request *http.Request) error {
 		variables := mux.Vars(request)
 		db, err := StartConn(config)
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return &APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
 		tx, err := db.Begin()
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return &APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
 		var docBytes []byte
@@ -255,34 +196,28 @@ func GetDocumentWrapper(config Config) func(http.ResponseWriter, *http.Request) 
 		if docIdOrSlug, ok := variables["idOrSlug"]; ok {
 			doc, err := GetDocument(tx, docIdOrSlug)
 			if err != nil {
-				LogError(err)
-				HandleError(writer)
-				return
+				return &APIError{http.StatusNotFound, "Could not find the document specified.", NewServerError(err)}
 			}
 
 			docBytes, err = json.Marshal(doc)
 			if err != nil {
-				LogError(err)
-				HandleError(writer)
-				return
+				return &APIError{http.StatusInternalServerError, JSON_MARSHAL_ERROR, NewServerError(err)}
 			}
 		} else {
 			docs, err := GetAllDocuments(tx)
 			if err != nil {
-				LogError(err)
-				HandleError(writer)
-				return
+				return &APIError{http.StatusInternalServerError, OPEN_DB_ERROR, NewServerError(err)}
 			}
 
 			docBytes, err = json.Marshal(docs)
 			if err != nil {
-				LogError(err)
-				HandleError(writer)
-				return
+				return &APIError{http.StatusInternalServerError, JSON_MARSHAL_ERROR, NewServerError(err)}
 			}
 		}
 
-		SuccessfulResponse(writer, request, &docBytes)
-		return
+		SuccessfulResponse(writer, request, docBytes)
+		return nil
 	}
+
+	return NewEndpoint(method)
 }

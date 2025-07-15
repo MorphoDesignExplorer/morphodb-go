@@ -25,8 +25,6 @@ import (
 	These secrets are acquired from the AWS Parameter Store, to avoid storing them locally.
 */
 
-type HandlerFunc func(http.ResponseWriter, *http.Request)
-
 // Middleware for allowing only authenticated users on certain routes.
 //
 // next is the http handler method to be called if an authenticated user has the right permissions to operate on the data.
@@ -34,28 +32,30 @@ type HandlerFunc func(http.ResponseWriter, *http.Request)
 // permissionFlags is a combination of Permission Flags (see auth_methods.go).
 //
 // Returns a http handler method wrapped in the authentication middleware.
-func AuthenticatedMiddleware(next HandlerFunc, permissionFlags PermissionFlags) HandlerFunc {
-	authState.Init()
-	return func(w http.ResponseWriter, r *http.Request) {
-		token := r.Header.Get("Authorization")
-		if strings.Index(token, "Bearer") == 0 && len(token) > 11 {
-			token = token[7:]
-		} else {
-			w.Header().Add("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(ErrorMessage{"Not authenticated."})
-			return
-		}
+func AuthenticatedMiddleware(permissionFlags PermissionFlags) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		authState.Init()
+		return func(w http.ResponseWriter, r *http.Request) {
+			token := r.Header.Get("Authorization")
+			if strings.Index(token, "Bearer") == 0 && len(token) > 11 {
+				token = token[7:]
+			} else {
+				w.Header().Add("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(APIMessage{"Not authenticated."})
+				return
+			}
 
-		authToken, err := VerifyToken[AuthToken](authState.secrets, []byte(token))
+			authToken, err := VerifyToken[AuthToken](authState.secrets, []byte(token))
 
-		if authToken.Valid() && authToken.Permissions.HasPermission(permissionFlags) && err == nil {
-			next(w, r)
-		} else {
-			w.Header().Add("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(ErrorMessage{"Not authenticated."})
-			return
+			if authToken.Valid() && authToken.Permissions.HasPermission(permissionFlags) && err == nil {
+				next(w, r)
+			} else {
+				w.Header().Add("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(APIMessage{"Not authenticated."})
+				return
+			}
 		}
 	}
 }
@@ -82,34 +82,34 @@ Route for a login process. Takes an email and password and returns an encrypted 
 
 The token should expire in 30 days.
 */
-func LoginHandler(config Config) HandlerFunc {
-	return func(writer http.ResponseWriter, request *http.Request) {
+func (config *Config) LoginEndpoint() *Endpoint {
+	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		authState.Init()
 		request.ParseForm()
 
 		email, ok := request.Form["email"]
 		if !ok || len(email) != 1 {
-			HandleErrorWithMessage(writer, fmt.Errorf("An email was not provided."))
-			return
+			err := fmt.Errorf("An email was not provided.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		password, ok := request.Form["password"]
 		if !ok || len(password) != 1 {
-			HandleErrorWithMessage(writer, fmt.Errorf("A password was not provided."))
-			return
+			err := fmt.Errorf("A password was not provided.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		// check if password hash matches
-		db, err := StartConn(config)
+		db, err := config.GetDB()
 		user, err := GetUser(db, email[0])
 		if err != nil {
-			HandleErrorWithMessage(writer, fmt.Errorf("Email or Password provided wasn't correct."))
-			return
+			err := fmt.Errorf("Email or Password provided wasn't correct.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		if !VerifyUser(user, password[0], authState.secrets) {
-			HandleErrorWithMessage(writer, fmt.Errorf("Email or Password provided wasn't correct."))
-			return
+			err := fmt.Errorf("Email or Password provided wasn't correct.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		// generate auth token that expires in a month
@@ -119,15 +119,16 @@ func LoginHandler(config Config) HandlerFunc {
 			time.Hour*24*30,
 		)
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			err := fmt.Errorf("Could not generate auth token.")
+			return APIError{http.StatusServiceUnavailable, err.Error(), NewServerError(err)}
 		}
 
 		writer.Header().Add("Content-Type", "text/plain")
 		writer.WriteHeader(http.StatusOK)
 		writer.Write(payload)
-	}
+
+		return nil
+	})
 }
 
 /*
@@ -137,29 +138,30 @@ and an otp in the form section.
 
 Returns an encrypted authorization JWT.
 */
-func VerifyLogin(writer http.ResponseWriter, request *http.Request) {
-	authState.Init()
-	bytes, err := io.ReadAll(request.Body)
-	if err != nil {
-		LogError(err)
-		HandleError(writer)
-		return
-	}
+func (config Config) VerifyLoginEndpoint() *Endpoint {
+	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
+		authState.Init()
+		bytes, err := io.ReadAll(request.Body)
+		if err != nil {
+			return APIError{http.StatusBadRequest, "Could not read auth token.", NewServerError(err)}
+		}
 
-	token, err := VerifyToken[AuthToken](authState.secrets, bytes)
-	if err != nil {
-		log.Println(err)
-		LogError(err)
-		HandleError(writer)
-		return
-	}
+		token, err := VerifyToken[AuthToken](authState.secrets, bytes)
+		if err != nil {
+			return APIError{http.StatusBadRequest, "Invalid token.", NewServerError(err)}
+		}
 
-	log.Println("token:", token, token.Valid())
+		if false {
+			log.Println("token:", token, token.Valid())
+		}
 
-	resp := []byte{}
-	writer.Header().Add("Content-Type", "text/plain")
-	writer.WriteHeader(http.StatusOK)
-	writer.Write(resp)
+		resp := []byte{}
+		writer.Header().Add("Content-Type", "text/plain")
+		writer.WriteHeader(http.StatusOK)
+		writer.Write(resp)
+
+		return nil
+	})
 }
 
 /*
@@ -168,15 +170,17 @@ Takes an email, and sends a reset request to the email if it exists.
 
 Rate limit this route, but not transparently.
 */
-func InitiateResetPassword(writer http.ResponseWriter, request *http.Request) {
-	// TODO implement this after acquiring a domain.
-	authState.Init()
-	err := request.ParseForm()
-	if err != nil {
-		LogError(err)
-		HandleError(writer)
-		return
-	}
+func (config Config) InitiateResetPasswordEndpoint() *Endpoint {
+	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
+		// TODO implement this after acquiring a domain.
+		authState.Init()
+		err := request.ParseForm()
+		if err != nil {
+			return APIError{http.StatusBadRequest, "Could not read form data.", NewServerError(err)}
+		}
+
+		return nil
+	})
 }
 
 /*
@@ -185,8 +189,8 @@ Takes a reset session token in the URL parameter section, and a password in the 
 
 Once the password is reset, invalidate the password reset session token.
 */
-func ResetPasswordHandler(config Config) HandlerFunc {
-	return func(writer http.ResponseWriter, request *http.Request) {
+func (config *Config) ResetPasswordEndpoint() *Endpoint {
+	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		var err error
 		authState.Init()
 
@@ -194,46 +198,43 @@ func ResetPasswordHandler(config Config) HandlerFunc {
 		if strings.Index(tokenString, "Bearer ") == 0 {
 			tokenString = tokenString[7:]
 		}
+
 		token, err := VerifyToken[ResetSessionToken](authState.secrets, []byte(tokenString))
 		if err != nil {
-			LogError(err)
-			HandleErrorWithMessage(writer, fmt.Errorf("No reset session."))
-			return
+			err := fmt.Errorf("No reset session.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		if !token.Valid() {
-			HandleErrorWithMessage(writer, fmt.Errorf("Invalid reset session."))
-			return
+			err := fmt.Errorf("Invalid reset session.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		err = request.ParseForm()
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusBadRequest, "Could not parse form data.", NewServerError(err)}
 		}
 
-		db, err := StartConn(config)
+		db, err := config.GetDB()
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
 		password, ok := request.Form["password"]
 		if !ok || len(password) != 1 {
-			HandleErrorWithMessage(writer, fmt.Errorf("A password was not provided."))
-			return
+			err := fmt.Errorf("A password was not provided.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		err = ReplacePassword(db, *token.Email, password[0], authState.secrets)
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, WRITE_DB_ERROR, NewServerError(err)}
 		}
 
-		response := []byte("Password was reset.")
-		SuccessfulResponse(writer, request, &response)
-	}
+		if err = SuccessfulResponseJson(writer, request, APIMessage{"Password was reset."}); err != nil {
+			return APIError{http.StatusServiceUnavailable, JSON_MARSHAL_ERROR, NewServerError(err)}
+		}
+
+		return nil
+	})
 }

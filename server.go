@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -19,12 +18,12 @@ import (
 func setupDB() error {
 	config, err := morphoroutes.GetConfig()
 	if err != nil {
-		panic(err)
+		return morphoroutes.NewServerError(err)
 	}
 
-	db, err := morphoroutes.StartConn(config)
+	db, err := config.GetDB()
 	if err != nil {
-		morphoroutes.LogError(err)
+		return morphoroutes.NewServerError(err)
 	}
 
 	queries := []string{
@@ -42,14 +41,13 @@ func setupDB() error {
 	for _, query := range queries {
 		_, err = db.Exec(query)
 		if err != nil {
-			morphoroutes.LogError(errors.New(query + err.Error()))
-			return err
+			return morphoroutes.NewServerError(err)
 		}
 	}
 
 	err = morphoroutes.InitAuthDB(db)
 	if err != nil {
-		return err
+		return morphoroutes.NewServerError(err)
 	}
 
 	return nil
@@ -83,12 +81,12 @@ func FilterMethodsMiddleware(methodsAllowed []string) func(http.Handler) http.Ha
 			w.Header().Add("Content-Type", "application/json")
 			w.Header().Add("Allow", strings.Join(methodsAllowed, ", "))
 			w.WriteHeader(http.StatusMethodNotAllowed)
-			json.NewEncoder(w).Encode(morphoroutes.ErrorMessage{Message: fmt.Sprintf("Method %s not allowed.", r.Method)})
+			json.NewEncoder(w).Encode(morphoroutes.APIMessage{Message: fmt.Sprintf("Method %s not allowed.", r.Method)})
 		})
 	}
 }
 
-func multiplexRoute(routes map[string]morphoroutes.HandlerFunc) morphoroutes.HandlerFunc {
+func multiplexRoute(routes map[string]http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		routes[r.Method](w, r)
 	}
@@ -97,6 +95,9 @@ func multiplexRoute(routes map[string]morphoroutes.HandlerFunc) morphoroutes.Han
 func SetupRouter() *mux.Router {
 	morphoroutes.GlobalCache = &morphoroutes.Cacher{}
 	morphoroutes.GlobalCache.InitCache()
+
+	// Get middleware into local scope for easier usage
+	AuthMiddleware := morphoroutes.AuthenticatedMiddleware
 
 	config, err := morphoroutes.GetConfig()
 	if err != nil {
@@ -109,41 +110,41 @@ func SetupRouter() *mux.Router {
 	dataRouter := topRouter.PathPrefix("/project").Subrouter()
 	dataRouter.Use(morphoroutes.CacheMiddleware)
 	dataRouter.HandleFunc("/", multiplexRoute(
-		map[string]morphoroutes.HandlerFunc{
-			"GET":  morphoroutes.GetProjectsWrapper(config),
-			"POST": (morphoroutes.PostProjectZip(config)), // TODO add authentication middleware
-			"PUT":  morphoroutes.AuthenticatedMiddleware(morphoroutes.UpdateProjectMetadata(config), morphoroutes.CAN_UPDATE),
+		map[string]http.HandlerFunc{
+			"GET":  config.GetProjectEndpoint().Finalize(),
+			"POST": config.PostProjectZip(), // TODO add authentication middleware
+			"PUT":  config.UpdateProjectMetadata().AddMiddleware(AuthMiddleware(morphoroutes.CAN_UPDATE)).Finalize(),
 		},
 	)).Methods("GET", "POST", "PUT")
 
-	dataRouter.HandleFunc("/{project}/", morphoroutes.GetProjectsWrapper(config)).Methods("GET", "POST")
-	dataRouter.HandleFunc("/{project}/model/", morphoroutes.GetSolutionsWrapper(config)).Methods("GET")
+	dataRouter.HandleFunc("/{project}/", config.GetProjectEndpoint().Finalize()).Methods("GET", "POST")
+	dataRouter.HandleFunc("/{project}/model/", config.GetSolutionEndpoint().Finalize()).Methods("GET")
 	dataRouter.HandleFunc("/{project}/model/{solution}/", multiplexRoute(
-		map[string]morphoroutes.HandlerFunc{
-			"GET":  morphoroutes.GetSolutionsWrapper(config),
-			"POST": morphoroutes.AuthenticatedMiddleware(morphoroutes.PostAsset(config), morphoroutes.CAN_CREATE|morphoroutes.CAN_UPDATE),
+		map[string]http.HandlerFunc{
+			"GET":  config.GetSolutionEndpoint().Finalize(),
+			"POST": config.PostAsset().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
 		},
 	)).Methods("GET", "POST")
 
 	documentRouter := topRouter.PathPrefix("/document").Subrouter()
 	documentRouter.HandleFunc("/", multiplexRoute(
-		map[string]morphoroutes.HandlerFunc {
-			"GET": morphoroutes.GetDocumentWrapper(config),
-			"POST": morphoroutes.AuthenticatedMiddleware(morphoroutes.PostDocument(config), morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE),
+		map[string]http.HandlerFunc{
+			"GET":  config.GetDocumentEndpoint().Finalize(),
+			"POST": config.PostDocument().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
 		},
 	)).Methods("GET", "POST")
 	documentRouter.HandleFunc("/{idOrSlug}/", multiplexRoute(
-		map[string]morphoroutes.HandlerFunc{
-			"GET": morphoroutes.GetDocumentWrapper(config),
-			"PUT": morphoroutes.AuthenticatedMiddleware(morphoroutes.PutDocument(config), morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE),
-			"DELETE": morphoroutes.AuthenticatedMiddleware(morphoroutes.DeleteDocument(config), morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE),
+		map[string]http.HandlerFunc{
+			"GET":    config.GetDocumentEndpoint().Finalize(),
+			"PUT":    config.PutDocument().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
+			"DELETE": config.DeleteDocument().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
 		},
 	)).Methods("GET", "PUT", "DELETE")
 
 	authRouter := topRouter.PathPrefix("/auth").Subrouter()
 	authRouter.Use(FilterMethodsMiddleware([]string{"POST"}))
-	authRouter.HandleFunc("/login/", morphoroutes.LoginHandler(config))
-	authRouter.HandleFunc("/reset/", morphoroutes.ResetPasswordHandler(config))
+	authRouter.HandleFunc("/login/", config.LoginEndpoint().Finalize())
+	authRouter.HandleFunc("/reset/", config.ResetPasswordEndpoint().Finalize())
 
 	return topRouter
 }
@@ -151,7 +152,8 @@ func SetupRouter() *mux.Router {
 func main() {
 	err := setupDB()
 	if err != nil {
-		panic(err)
+		log.Print(err)
+		return
 	}
 
 	topRouter := SetupRouter()

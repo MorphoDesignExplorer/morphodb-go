@@ -2,10 +2,12 @@ package morphoroutes
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/gorilla/mux"
 	"mime/multipart"
 	"net/http"
+
+	"github.com/gorilla/mux"
 )
 
 // Every endpoint in this route set must be accessed with authentication only
@@ -17,142 +19,117 @@ type PostProjectRequest struct {
 	Project  Project     `json:"project"`
 }
 
-func PostProjectZip(config Config) func(http.ResponseWriter, *http.Request) {
-	reportError := func(err error, writer http.ResponseWriter, communicate bool) {
-		if communicate {
-			HandleErrorWithMessage(writer, err)
-		} else {
-			HandleError(writer)
-		}
-	}
+func (config Config) PostProjectZip() func(http.ResponseWriter, *http.Request) {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		err := UploadProject(config)
 		if err != nil {
-			LogError(err)
-			reportError(err, writer, true)
+			var a APIError
+			if err != nil {
+				if errors.As(err, a) {
+					HandleAPIError(writer, a)
+				} else {
+					// unknown error at this point
+					LogError(err)
+					HandleError(writer)
+				}
+			}
 		}
 
-		response := []byte("ok")
-		SuccessfulResponse(writer, request, &response)
+		SuccessfulResponse(writer, request, []byte("{'message': 'ok'}"))
 		GlobalCache.InvalidateAll()
 	}
 }
 
 // Endpoint that takes a CSV with a project's solutions and uploads it to the database.
-func PostProject(config Config) func(http.ResponseWriter, *http.Request) {
-	reportError := func(err error, writer http.ResponseWriter, communicate bool) {
-		if communicate {
-			HandleErrorWithMessage(writer, err)
-		} else {
-			HandleError(writer)
-		}
-	}
-	return func(writer http.ResponseWriter, request *http.Request) {
+func (config Config) PostProject() *Endpoint {
+	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		var data PostProjectRequest
 		dec := json.NewDecoder(request.Body)
 		err := dec.Decode(&data)
 		if err != nil {
-			LogError(err)
-			reportError(err, writer, false)
-			return
+			return APIError{http.StatusBadRequest, JSON_UNMARSHAL_ERROR, NewServerError(err)}
 		}
 
-		db, err := StartConn(config)
+		db, err := config.GetDB()
 		if err != nil {
-			LogError(err)
-			reportError(err, writer, false)
-			return
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
 		tx, err := db.Begin()
 		if err != nil {
-			LogError(err)
-			reportError(err, writer, false)
-			return
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 		defer tx.Rollback()
 
 		// save the project first
 		if err = data.Project.Create(tx); err != nil {
-			LogError(err)
-			reportError(err, writer, true)
-			return
+			return APIError{http.StatusServiceUnavailable, WRITE_DB_ERROR, NewServerError(err)}
 		}
 
 		// then save the solutions
 		if err = data.Models.Create(tx, data.Project.ProjectName); err != nil {
-			LogError(err)
-			reportError(err, writer, true)
-			return
+			return APIError{http.StatusServiceUnavailable, WRITE_DB_ERROR, NewServerError(err)}
 		}
 
 		// finally save the metadata
 		if err = data.Metadata.Create(tx, data.Project.ProjectName); err != nil {
-			LogError(err)
-			reportError(err, writer, true)
-			return
+			return APIError{http.StatusServiceUnavailable, WRITE_DB_ERROR, NewServerError(err)}
 		}
 
 		if err = tx.Commit(); err != nil {
-			LogError(err)
-			reportError(err, writer, true)
+			return APIError{http.StatusServiceUnavailable, WRITE_DB_ERROR, NewServerError(err)}
 		}
 
 		responseBytes := fmt.Appendf([]byte{}, fmt.Sprintf("%s was uploaded successfully.", data.Project.ProjectName))
 
-		SuccessfulResponse(writer, request, &responseBytes)
+		SuccessfulResponse(writer, request, responseBytes)
 
 		GlobalCache.InvalidateAll()
 
-		// GlobalCache.Invalidate(request.URL.Path) // POST requests to this URI invalidate the cache.
+		GlobalCache.Invalidate(request.URL.Path) // POST requests to this URI invalidate the cache.
+		return nil
+	})
+}
+
+func (config Config) UpdateProjectMetadata() *Endpoint {
+
+	type UpdateProjectMetadataRequest struct {
+		VariableMetadataUnits *map[string]string `json:"variable_metadata_units"`
+		OutputMetadataUnits   *map[string]string `json:"output_metadata_units"`
+		AssetDescriptions     *map[string]string `json:"asset_descriptions"`
+		Captions              *[]Caption         `json:"captions"`
+		ProjectDescription    *string            `json:"project_description"`
+		ProjectName           *string            `json:"project_name"`
+		HumanName             *string            `json:"human_name"`
 	}
-}
 
-type UpdateProjectMetadataRequest struct {
-	VariableMetadataUnits *map[string]string `json:"variable_metadata_units"`
-	OutputMetadataUnits   *map[string]string `json:"output_metadata_units"`
-	AssetDescriptions     *map[string]string `json:"asset_descriptions"`
-	Captions              *[]Caption         `json:"captions"`
-	ProjectDescription    *string            `json:"project_description"`
-	ProjectName           *string            `json:"project_name"`
-	HumanName             *string            `json:"human_name"`
-}
-
-func UpdateProjectMetadata(config Config) func(writer http.ResponseWriter, request *http.Request) {
-	return func(writer http.ResponseWriter, request *http.Request) {
+	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		db, err := StartConn(config)
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
 		var upmReq UpdateProjectMetadataRequest
 		dec := json.NewDecoder(request.Body)
 		err = dec.Decode(&upmReq)
 		if err != nil {
-			LogError(err)
-			HandleErrorWithMessage(writer, fmt.Errorf("Invalid JSON. Recheck request and JSON format."))
-			return
+			err := fmt.Errorf(JSON_UNMARSHAL_ERROR)
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		if upmReq.ProjectName == nil {
-			HandleErrorWithMessage(writer, fmt.Errorf("No project_name specified."))
-			return
+			err := fmt.Errorf("No project name specified.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		project, err := GetProject(db, *upmReq.ProjectName)
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
 		metadata, err := GetMetadata(db, *upmReq.ProjectName)
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
 		changed := false
@@ -202,9 +179,7 @@ func UpdateProjectMetadata(config Config) func(writer http.ResponseWriter, reque
 
 		tx, err := db.Begin()
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 		defer tx.Rollback()
 
@@ -218,47 +193,40 @@ func UpdateProjectMetadata(config Config) func(writer http.ResponseWriter, reque
 
 		err = tx.Commit()
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, WRITE_DB_ERROR, NewServerError(err)}
 		}
 
-		msg := []byte("updated project successfully.")
-		SuccessfulResponse(writer, request, &msg)
+		SuccessfulResponse(writer, request, []byte("{'message': 'updated project successfully.'"))
 
 		GlobalCache.InvalidateAll()
-		// GlobalCache.Invalidate(request.URL.Path)
-	}
-}
-
-type PostAssetRequest struct {
-	Asset Asset `json:"asset"`
+		return nil
+	})
 }
 
 // Endpoint that uploads one or more images with attached tags for a particular solution, to S3.
-func PostAsset(config Config) func(writer http.ResponseWriter, request *http.Request) {
-	return func(writer http.ResponseWriter, request *http.Request) {
+func (config Config) PostAsset() *Endpoint {
+
+	type PostAssetRequest struct {
+		Asset Asset `json:"asset"`
+	}
+
+	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		request.Body = http.MaxBytesReader(writer, request.Body, 31<<20) // Total of 31MB allowed for the whole body
 		err := request.ParseMultipartForm(30 << 20)                      // Allow 30MB of uploads
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			err := fmt.Errorf("Could not read form data.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		db, err := StartConn(config)
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
 		solutionIds, ok := request.MultipartForm.Value["solution_id"]
 		if !ok || len(solutionIds) != 1 {
 			err := fmt.Errorf("No solution ID specified.")
-			LogError(err)
-			HandleErrorWithMessage(writer, err)
-			return
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 		solutionId := solutionIds[0]
 
@@ -267,9 +235,7 @@ func PostAsset(config Config) func(writer http.ResponseWriter, request *http.Req
 		err = assetRow.Scan(&projectAssets)
 		if err != nil {
 			err := fmt.Errorf("Invalid solution ID.")
-			LogError(err)
-			HandleErrorWithMessage(writer, err)
-			return
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		var scopedId int
@@ -277,9 +243,7 @@ func PostAsset(config Config) func(writer http.ResponseWriter, request *http.Req
 		err = scopedIdRow.Scan(&scopedId)
 		if err != nil {
 			err := fmt.Errorf("Invalid solution ID.")
-			LogError(err)
-			HandleErrorWithMessage(writer, err)
-			return
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		files := make(map[string]*multipart.FileHeader)
@@ -289,14 +253,10 @@ func PostAsset(config Config) func(writer http.ResponseWriter, request *http.Req
 			// fmt.Println(tag, handle)
 			if len(handle) > 1 {
 				err := fmt.Errorf("tag %s had more than one files uploaded to it.", tag)
-				LogError(err)
-				HandleErrorWithMessage(writer, err)
-				return
+				return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 			} else if len(handle) == 0 {
 				err := fmt.Errorf("tag %s had no files uploaded to it.", tag)
-				LogError(err)
-				HandleErrorWithMessage(writer, err)
-				return
+				return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 			}
 			files[tag] = handle[0]
 		}
@@ -304,49 +264,48 @@ func PostAsset(config Config) func(writer http.ResponseWriter, request *http.Req
 		err = CreateAssets(db, projectAssets, solutionId, scopedId, files)
 		if err != nil {
 			LogError(err)
-			HandleErrorWithMessage(writer, err)
-			return
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
-		SuccessfulResponse(writer, request, &[]byte{})
+		SuccessfulResponse(writer, request, []byte("{'message': 'updated assets successfully.'"))
 
 		GlobalCache.Invalidate(request.URL.Path) // POST requests to this endpoint invalidate the cache.
+		return nil
+	})
+}
+
+func (config Config) PutDocument() *Endpoint {
+
+	type PutDocumentRequest struct {
+		Text   *string `json:"text"`
+		Title  *string `json:"title"`
+		Parent *string `json:"parent"`
 	}
-}
 
-type PutDocumentRequest struct {
-	Text   *string `json:"text"`
-	Title  *string `json:"title"`
-	Parent *string `json:"parent"`
-}
-
-func PutDocument(config Config) func(writer http.ResponseWriter, request *http.Request) {
-	return func(writer http.ResponseWriter, request *http.Request) {
+	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		variables := mux.Vars(request)
 
 		var docReq PutDocumentRequest
 		dec := json.NewDecoder(request.Body)
 		err := dec.Decode(&docReq)
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusBadRequest, JSON_UNMARSHAL_ERROR, NewServerError(err)}
 		}
 
 		idOrSlug, ok := variables["idOrSlug"]
 		if !ok {
-			HandleErrorWithMessage(writer, fmt.Errorf("Id or Slug was empty."))
-			return
+			err := fmt.Errorf("Id or Slug was empty.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		if docReq.Text == nil {
-			HandleErrorWithMessage(writer, fmt.Errorf("No content was provided to update the document with."))
-			return
+			err := fmt.Errorf("No content was provided to update the document with.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		if docReq.Title == nil {
-			HandleErrorWithMessage(writer, fmt.Errorf("No title was provided for the document."))
-			return
+			err := fmt.Errorf("No title was provided for the document.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		if docReq.Parent == nil {
@@ -356,71 +315,65 @@ func PutDocument(config Config) func(writer http.ResponseWriter, request *http.R
 
 		db, err := StartConn(config)
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
 		tx, err := db.Begin()
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
 		doc, err := GetDocument(tx, idOrSlug)
 		if err != nil {
-			LogError(err)
-			HandleErrorWithMessage(writer, fmt.Errorf("Could not find the document %s", idOrSlug))
+			err := fmt.Errorf("Could not find the document %s", idOrSlug)
+			return APIError{http.StatusNotFound, err.Error(), NewServerError(err)}
 		}
 
 		err = doc.Update(tx, *docReq.Text, *docReq.Title, *docReq.Parent)
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, WRITE_DB_ERROR, NewServerError(err)}
 		}
 
 		err = tx.Commit()
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, WRITE_DB_ERROR, NewServerError(err)}
 		}
+
+		SuccessfulResponse(writer, request, []byte("{'message': 'document modified successfully.'"))
+		return nil
+	})
+}
+
+func (config Config) PostDocument() *Endpoint {
+
+	type PostDocumentRequest struct {
+		Slug   *string `json:"slug"`
+		Text   *string `json:"text"`
+		Title  *string `json:"title"`
+		Parent *string `json:"parent"`
 	}
-}
 
-type PostDocumentRequest struct {
-	Slug   *string `json:"slug"`
-	Text   *string `json:"text"`
-	Title  *string `json:"title"`
-	Parent *string `json:"parent"`
-}
-
-func PostDocument(config Config) func(writer http.ResponseWriter, request *http.Request) {
-	return func(writer http.ResponseWriter, request *http.Request) {
+	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		var docReq PostDocumentRequest
 		dec := json.NewDecoder(request.Body)
 		err := dec.Decode(&docReq)
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusBadRequest, JSON_UNMARSHAL_ERROR, NewServerError(err)}
 		}
 
 		if docReq.Slug == nil {
-			HandleErrorWithMessage(writer, fmt.Errorf("Slug is empty."))
-			return
+			err := fmt.Errorf("Slug is emtpy.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		if docReq.Text == nil {
-			HandleErrorWithMessage(writer, fmt.Errorf("No content was provided to update the document with."))
-			return
+			err := fmt.Errorf("No content was provided to update the document with.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		if docReq.Title == nil {
-			HandleErrorWithMessage(writer, fmt.Errorf("No title was provided for the document."))
-			return
+			err := fmt.Errorf("No title was provided for the document.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		if docReq.Parent == nil {
@@ -430,83 +383,71 @@ func PostDocument(config Config) func(writer http.ResponseWriter, request *http.
 
 		db, err := StartConn(config)
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
 		tx, err := db.Begin()
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
 		doc := Document{}
 
 		err = doc.Create(tx, *docReq.Slug, *docReq.Text, *docReq.Title, *docReq.Parent)
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, WRITE_DB_ERROR, NewServerError(err)}
 		}
 
 		err = tx.Commit()
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, WRITE_DB_ERROR, NewServerError(err)}
 		}
-	}
+
+		SuccessfulResponse(writer, request, []byte("{'message': 'document created successfully.'"))
+		return nil
+	})
 }
 
-func DeleteDocument(config Config) func(writer http.ResponseWriter, request *http.Request) {
-	return func(writer http.ResponseWriter, request *http.Request) {
+func (config Config) DeleteDocument() *Endpoint {
+	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		variables := mux.Vars(request)
 		idOrSlug, ok := variables["idOrSlug"]
 		if !ok {
-			HandleErrorWithMessage(writer, fmt.Errorf("Id or Slug was empty."))
-			return
+			err := fmt.Errorf("Id or Slug was empty.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		if idOrSlug == "Front Matter" {
-			HandleErrorWithMessage(writer, fmt.Errorf("Cannot delete front matter."))
-			return
+			err := fmt.Errorf("Cannot delete front matter.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
 		db, err := StartConn(config)
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
 		tx, err := db.Begin()
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
 		doc, err := GetDocument(tx, idOrSlug)
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
 		err = doc.Delete(tx)
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, DELETE_DB_ERROR, NewServerError(err)}
 		}
 
 		err = tx.Commit()
 		if err != nil {
-			LogError(err)
-			HandleError(writer)
-			return
+			return APIError{http.StatusServiceUnavailable, WRITE_DB_ERROR, NewServerError(err)}
 		}
-	}
+
+		SuccessfulResponse(writer, request, []byte("{'message': 'document deleted successfully.'"))
+		return nil
+	})
 }

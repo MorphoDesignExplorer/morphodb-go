@@ -69,6 +69,11 @@ func CreateUser(db *sql.DB, email string, password string, permissions Permissio
 	return nil
 }
 
+/*
+Replaces the password of a user with a new password in the database.
+
+Returns nil if the operation is successful, else return an error.
+*/
 func ReplacePassword(db *sql.DB, email string, password string, s Secrets) error {
 	newPasswordHash := hashPassword([]byte(password), s.password)
 	result, err := db.Exec("UPDATE user SET password_hash = ? WHERE email = ?", newPasswordHash, email)

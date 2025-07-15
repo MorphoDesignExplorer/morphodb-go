@@ -5,27 +5,33 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/gabriel-vasile/mimetype"
-	"github.com/google/uuid"
 	"io"
 	"math/rand"
 	"mime/multipart"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/gabriel-vasile/mimetype"
+	"github.com/google/uuid"
 )
 
 /*
 	Project Methods
 */
 
+/*
+Gets all the projects available in the database.
+
+Returns a list of Project structs and an error, if there's an issue during querying or unpacking results.
+*/
 func GetAllProjects(db *sql.DB) ([]Project, error) {
 	rows, err := db.Query("SELECT creation_date, project_name, variable_metadata, output_metadata, assets, deleted FROM project")
 	if err != nil {
-		return []Project{}, err
+		return []Project{}, NewServerError(err)
 	}
 
 	projects := make([]Project, 0)
@@ -34,7 +40,7 @@ func GetAllProjects(db *sql.DB) ([]Project, error) {
 		var p Project
 		err = rows.Scan(&p.CreationDate, &p.ProjectName, &p.VariableMetadata, &p.OutputMetadata, &p.Assets, &p.Deleted)
 		if err != nil {
-			return []Project{}, err
+			return []Project{}, NewServerError(err)
 		}
 		projects = append(projects, p)
 	}
@@ -143,7 +149,7 @@ func (p *Project) Update(tx *sql.Tx) error {
 
 func GetAllSolutions(tx *sql.Tx, projectName string) ([]Solution, error) {
 	solutions := make([]Solution, 0)
-	rows, err := tx.Query("SELECT id, scoped_id, parameters, output_parameters FROM solution");
+	rows, err := tx.Query("SELECT id, scoped_id, parameters, output_parameters FROM solution")
 	if err != nil {
 		return nil, err
 	}
