@@ -3,8 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
-	morphoroutes "github.com/MorphoDesignExplorer/morphodb-go/morpho-routes"
 	"net/mail"
+
+	morphoroutes "github.com/MorphoDesignExplorer/morphodb-go/morpho-routes"
 )
 
 func main() {
@@ -21,9 +22,9 @@ func main() {
 	// ./user-manager -get-user email@example.com
 
 	createAdminUser := flag.Bool("create-admin-user", false, "Create an admin user with an email, password.")
-	setPassword		:= flag.Bool("set-password", false, "Reset a user's password.")
-	getUser			:= flag.Bool("get-user", false, "Get a user's details.")
-	help			:= flag.Bool("h", false, "")
+	setPassword := flag.Bool("set-password", false, "Reset a user's password.")
+	getUser := flag.Bool("get-user", false, "Get a user's details.")
+	help := flag.Bool("h", false, "")
 
 	flag.Parse()
 
@@ -31,13 +32,13 @@ func main() {
 		fmt.Println(usage)
 	}
 
-	config, err := morphoroutes.GetConfig()
+	service, err := morphoroutes.StartService()
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 
-	db, err := morphoroutes.StartConn(config)
+	db, err := service.GetDB()
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -55,7 +56,6 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-
 
 	if *createAdminUser {
 		args := flag.Args()

@@ -15,13 +15,8 @@ import (
 )
 
 // Initialize the DB in the case that it doesn't exist.
-func setupDB() error {
-	config, err := morphoroutes.GetConfig()
-	if err != nil {
-		return morphoroutes.NewServerError(err)
-	}
-
-	db, err := config.GetDB()
+func setupDB(service morphoroutes.Service) error {
+	db, err := service.GetDB()
 	if err != nil {
 		return morphoroutes.NewServerError(err)
 	}
@@ -99,7 +94,7 @@ func SetupRouter() *mux.Router {
 	// Get middleware into local scope for easier usage
 	AuthMiddleware := morphoroutes.AuthenticatedMiddleware
 
-	config, err := morphoroutes.GetConfig()
+	service, err := morphoroutes.StartService()
 	if err != nil {
 		panic(err)
 	}
@@ -111,46 +106,53 @@ func SetupRouter() *mux.Router {
 	dataRouter.Use(morphoroutes.CacheMiddleware)
 	dataRouter.HandleFunc("/", multiplexRoute(
 		map[string]http.HandlerFunc{
-			"GET":  config.GetProjectEndpoint().Finalize(),
-			"POST": config.PostProjectZip(), // TODO add authentication middleware
-			"PUT":  config.UpdateProjectMetadata().AddMiddleware(AuthMiddleware(morphoroutes.CAN_UPDATE)).Finalize(),
+			"GET":  service.GetProjectEndpoint().Finalize(),
+			"POST": service.PostProjectZip(), // TODO add authentication middleware
+			"PUT":  service.UpdateProjectMetadata().AddMiddleware(AuthMiddleware(morphoroutes.CAN_UPDATE)).Finalize(),
 		},
 	)).Methods("GET", "POST", "PUT")
 
-	dataRouter.HandleFunc("/{project}/", config.GetProjectEndpoint().Finalize()).Methods("GET", "POST")
-	dataRouter.HandleFunc("/{project}/model/", config.GetSolutionEndpoint().Finalize()).Methods("GET")
+	dataRouter.HandleFunc("/{project}/", service.GetProjectEndpoint().Finalize()).Methods("GET", "POST")
+	dataRouter.HandleFunc("/{project}/model/", service.GetSolutionEndpoint().Finalize()).Methods("GET")
 	dataRouter.HandleFunc("/{project}/model/{solution}/", multiplexRoute(
 		map[string]http.HandlerFunc{
-			"GET":  config.GetSolutionEndpoint().Finalize(),
-			"POST": config.PostAsset().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
+			"GET":  service.GetSolutionEndpoint().Finalize(),
+			"POST": service.PostAsset().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
 		},
 	)).Methods("GET", "POST")
 
 	documentRouter := topRouter.PathPrefix("/document").Subrouter()
 	documentRouter.HandleFunc("/", multiplexRoute(
 		map[string]http.HandlerFunc{
-			"GET":  config.GetDocumentEndpoint().Finalize(),
-			"POST": config.PostDocument().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
+			"GET":  service.GetDocumentEndpoint().Finalize(),
+			"POST": service.PostDocument().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
 		},
 	)).Methods("GET", "POST")
 	documentRouter.HandleFunc("/{idOrSlug}/", multiplexRoute(
 		map[string]http.HandlerFunc{
-			"GET":    config.GetDocumentEndpoint().Finalize(),
-			"PUT":    config.PutDocument().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
-			"DELETE": config.DeleteDocument().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
+			"GET":    service.GetDocumentEndpoint().Finalize(),
+			"PUT":    service.PutDocument().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
+			"DELETE": service.DeleteDocument().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
 		},
 	)).Methods("GET", "PUT", "DELETE")
 
 	authRouter := topRouter.PathPrefix("/auth").Subrouter()
 	authRouter.Use(FilterMethodsMiddleware([]string{"POST"}))
-	authRouter.HandleFunc("/login/", config.LoginEndpoint().Finalize())
-	authRouter.HandleFunc("/reset/", config.ResetPasswordEndpoint().Finalize())
+	authRouter.HandleFunc("/login/", service.LoginEndpoint().Finalize())
+	authRouter.HandleFunc("/reset/", service.ResetPasswordEndpoint().Finalize())
 
 	return topRouter
 }
 
 func main() {
-	err := setupDB()
+
+	service, err := morphoroutes.StartService()
+	if err != nil {
+		log.Print(err)
+		return
+	}
+
+	err = setupDB(service)
 	if err != nil {
 		log.Print(err)
 		return
