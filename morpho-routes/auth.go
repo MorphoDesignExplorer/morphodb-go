@@ -42,7 +42,7 @@ func AuthenticatedMiddleware(permissionFlags PermissionFlags) func(http.HandlerF
 			} else {
 				w.Header().Add("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
-				json.NewEncoder(w).Encode(APIMessage{"Not authenticated."})
+				json.NewEncoder(w).Encode(APIError{http.StatusUnauthorized, "Not authenticated.", ServerError{}})
 				return
 			}
 
@@ -53,7 +53,7 @@ func AuthenticatedMiddleware(permissionFlags PermissionFlags) func(http.HandlerF
 			} else {
 				w.Header().Add("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
-				json.NewEncoder(w).Encode(APIMessage{"Not authenticated."})
+				json.NewEncoder(w).Encode(APIError{http.StatusUnauthorized, "Not authenticated.", ServerError{}})
 				return
 			}
 		}

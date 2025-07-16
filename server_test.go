@@ -19,8 +19,8 @@ func init() {
 	morphoroutes.GlobalCache.InitCache()
 }
 
-func mockConfig() morphoroutes.Config {
-	return morphoroutes.Config{
+func mockConfig() morphoroutes.Service {
+	return morphoroutes.Service{
 		DB_STRING:               "./tests/morpho.sqlite",
 		AWS_REGION:              "us-east-1",
 		AWS_STORAGE_BUCKET_NAME: "morpho-images",
@@ -41,9 +41,9 @@ func getFileBytes(path string) ([]byte, error) {
 
 func TestProjectEndpoint(t *testing.T) {
 	t.Run("TestProjectEndpoint", func(t *testing.T) {
-		config := mockConfig()
+		service := mockConfig()
 
-		getProjects := config.GetProjectEndpoint().Finalize()
+		getProjects := service.GetProjectEndpoint().Finalize()
 
 		request, _ := http.NewRequest(http.MethodGet, "/project/", nil)
 		response := httptest.NewRecorder()
@@ -90,7 +90,7 @@ func TestProjectEndpoint(t *testing.T) {
 
 func TestSolutionEndpoint(t *testing.T) {
 	t.Run("TestProjectModelEndpoint", func(t *testing.T) {
-		config := mockConfig()
+		service := mockConfig()
 		endpoints := []string{"GCGA_10", "GCGA_39"}
 
 		deserializeArray := func(b []byte) (slice []any) {
@@ -108,7 +108,7 @@ func TestSolutionEndpoint(t *testing.T) {
 
 			request = mux.SetURLVars(request, variables)
 
-			getSolutions := config.GetSolutionEndpoint().Finalize()
+			getSolutions := service.GetSolutionEndpoint().Finalize()
 			getSolutions(response, request)
 
 			fileBytes, err := getFileBytes(fmt.Sprintf("./tests/model_%s.json", endpoint))

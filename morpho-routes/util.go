@@ -106,13 +106,15 @@ func LogError(err error) {
 	}
 }
 
-func SuccessfulResponseJson(writer http.ResponseWriter, request *http.Request, a APIMessage) error {
-	content, err := json.Marshal(a)
+func SuccessfulResponseJson(writer http.ResponseWriter, request *http.Request, message any) error {
+	content, err := json.Marshal(message)
 	if err != nil {
 		return NewServerError(err)
 	}
 
-	GlobalCache.Cache(request.URL.Path, content)
+	if request.Method == "GET" {
+		GlobalCache.Cache(request.URL.Path, content)
+	}
 	writer.Header().Add("Content-Type", "application/json")
 	writer.WriteHeader(http.StatusOK)
 	writer.Write(content)
@@ -122,7 +124,9 @@ func SuccessfulResponseJson(writer http.ResponseWriter, request *http.Request, a
 
 // Writes headers to signify a successful response, and then writes the content to a response stream.
 func SuccessfulResponse(writer http.ResponseWriter, request *http.Request, content []byte) {
-	GlobalCache.Cache(request.URL.Path, content)
+	if request.Method == "GET" {
+		GlobalCache.Cache(request.URL.Path, content)
+	}
 	writer.Header().Add("Content-Type", "application/json")
 	writer.WriteHeader(http.StatusOK)
 	writer.Write(content)

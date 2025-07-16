@@ -48,9 +48,14 @@ func GetAllProjects(db *sql.DB) ([]Project, error) {
 	return projects, nil
 }
 
+/*
+Gets a particular project from the database.
+
+Returns the project and an error.
+*/
 func GetProject(db *sql.DB, projectName string) (Project, error) {
 	if row, err := db.Query(
-		"SELECT creation_date, project_name, variable_metadata, output_metadata, assets, deleted FROM project WHERE project_name=?",
+		"SELECT creation_date, project_name, variable_metadata, output_metadata, assets, deleted FROM project WHERE project_name = ?",
 		projectName,
 	); err == nil {
 		var p Project
@@ -60,6 +65,38 @@ func GetProject(db *sql.DB, projectName string) (Project, error) {
 	} else {
 		return Project{}, err
 	}
+}
+
+/*
+Deletes a project.
+
+db is the database object.
+
+Returns an error if the database write fails.
+*/
+func (p *Project) Delete(tx *sql.Tx) error {
+	fmt.Println(p.ProjectName)
+	_, err := tx.Exec("DELETE FROM asset WHERE asset.solution_id IN (SELECT solution.id FROM solution WHERE solution.project_name = ?)", p.ProjectName)
+	if err != nil {
+		return NewServerError(err)
+	}
+
+	_, err = tx.Exec("DELETE FROM solution WHERE project_name = ?", p.ProjectName)
+	if err != nil {
+		return NewServerError(err)
+	}
+
+	_, err = tx.Exec("DELETE FROM metadata WHERE project_name = ?", p.ProjectName)
+	if err != nil {
+		return NewServerError(err)
+	}
+
+	_, err = tx.Exec("DELETE FROM project WHERE project_name = ?", p.ProjectName)
+	if err != nil {
+		return NewServerError(err)
+	}
+
+	return nil
 }
 
 /*
@@ -174,35 +211,35 @@ An error is returned if the object validation or the database write fails.
 */
 func (s SolutionSet) Create(tx *sql.Tx, projectName string) error {
 	if err := Validate(s); err != nil {
-		return err
+		return NewServerError(err)
 	}
 
 	stmt, err := tx.Prepare(
 		"INSERT INTO solution (id, parameters, output_parameters, project_name, scoped_id) VALUES (?, ?, ?, ?, ?)",
 	)
 	if err != nil {
-		return err
+		return NewServerError(err)
 	}
 	defer stmt.Close()
 
 	for _, solution := range s {
 		if err := Validate(s); err != nil {
-			return err
+			return NewServerError(err)
 		}
 
 		iparam, err := json.Marshal(solution.Parameter)
 		if err != nil {
-			return err
+			return NewServerError(err)
 		}
 
 		oparam, err := json.Marshal(solution.OutputParameter)
 		if err != nil {
-			return err
+			return NewServerError(err)
 		}
 
 		scopedId, err := strconv.ParseInt(solution.ScopedId, 10, 32)
 		if err != nil {
-			return err
+			return NewServerError(err)
 		}
 
 		_, err = stmt.Exec(
@@ -213,7 +250,7 @@ func (s SolutionSet) Create(tx *sql.Tx, projectName string) error {
 			scopedId,
 		)
 		if err != nil {
-			return err
+			return NewServerError(err)
 		}
 	}
 

@@ -2,7 +2,6 @@ package morphoroutes
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http"
@@ -13,33 +12,107 @@ import (
 // Every endpoint in this route set must be accessed with authentication only
 // Every endpoint in this route set will invalidate the cache.
 
+// Endpoint that takes a zip File with a project's solutions and uploads it to the database.
+//
+// Returns an Endpoint object.
+func (service Service) PostProjectZip() *Endpoint {
+
+	type PostProjectZipResponse struct {
+		Message     string `json:"message"`
+		ProjectName string `json:"project_name"`
+	}
+
+	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
+		err := request.ParseMultipartForm(1024 * 1024 * 1024) // accept upto 1 gigabyte.
+		if err != nil {
+			return err
+		}
+
+		fileMap := request.MultipartForm.File
+
+		if files, ok := fileMap["upload"]; ok {
+			if contentTypeHeader, ok := files[0].Header["Content-Type"]; ok && contentTypeHeader[0] == "application/zip" {
+				projectName, err := UploadProject(service, files[0])
+				if err != nil {
+					return APIError{http.StatusInternalServerError, "Could not upload zip.", NewServerError(err)}
+				}
+
+				if err = SuccessfulResponseJson(writer, request, PostProjectZipResponse{Message: "Uploaded project successfully.", ProjectName: projectName}); err != nil {
+					return APIError{http.StatusInternalServerError, JSON_MARSHAL_ERROR, NewServerError(err)}
+				}
+			} else if contentTypeHeader[0] != "application/zip" {
+				err := fmt.Errorf("File submitted was not a zip file.")
+				return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
+			} else if !ok {
+				err := fmt.Errorf("No file was submitted in the form field 'upload'.")
+				return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
+			}
+		} else {
+			err := fmt.Errorf("No file was submitted in the form field 'upload'.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
+		}
+
+		GlobalCache.InvalidateAll()
+
+		return nil
+	})
+}
+
 type PostProjectRequest struct {
 	Metadata Metadata    `json:"metadata"`
 	Models   SolutionSet `json:"models"`
 	Project  Project     `json:"project"`
 }
 
-func (service Service) PostProjectZip() func(http.ResponseWriter, *http.Request) {
-	return func(writer http.ResponseWriter, request *http.Request) {
-		err := UploadProject(service)
-		if err != nil {
-			apiError := &APIError{}
-			if errors.As(err, apiError) {
-				HandleAPIError(writer, request, *apiError)
-			} else {
-				// unknown error at this point
-				LogError(err)
-				HandleError(writer)
-			}
+func (service Service) DeleteProjectEndpoint() *Endpoint {
+	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
+		variables := mux.Vars(request)
+
+		projectName, ok := variables["project"]
+		if !ok {
+			err := fmt.Errorf("Could not find project to delete.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
-		SuccessfulResponse(writer, request, []byte("{'message': 'ok'}"))
+		db, err := service.GetDB()
+		if err != nil {
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
+		}
+		defer tx.Rollback()
+
+		project, err := GetProject(db, projectName)
+		if err != nil {
+			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
+		}
+
+		err = project.Delete(tx)
+		if err != nil {
+			return APIError{http.StatusServiceUnavailable, WRITE_DB_ERROR, NewServerError(err)}
+		}
+
+		if err = tx.Commit(); err != nil {
+			return APIError{http.StatusServiceUnavailable, WRITE_DB_ERROR, NewServerError(err)}
+		}
+
+		if err = SuccessfulResponseJson(writer, request, APIMessage{"Deleted " + projectName + " successfully."}); err != nil {
+			return APIError{http.StatusServiceUnavailable, JSON_MARSHAL_ERROR, NewServerError(err)}
+		}
+
 		GlobalCache.InvalidateAll()
-	}
+
+		return nil
+	})
 }
 
 // Endpoint that takes a CSV with a project's solutions and uploads it to the database.
-func (service Service) PostProject() *Endpoint {
+//
+// Returns an Endpoint object.
+func (service Service) PostProjectEndpoint() *Endpoint {
 	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		var data PostProjectRequest
 		dec := json.NewDecoder(request.Body)
@@ -89,7 +162,7 @@ func (service Service) PostProject() *Endpoint {
 	})
 }
 
-func (service Service) UpdateProjectMetadata() *Endpoint {
+func (service Service) UpdateProjectMetadataEndpoint() *Endpoint {
 
 	type UpdateProjectMetadataRequest struct {
 		VariableMetadataUnits *map[string]string `json:"variable_metadata_units"`
@@ -116,6 +189,11 @@ func (service Service) UpdateProjectMetadata() *Endpoint {
 		}
 
 		if upmReq.ProjectName == nil {
+			err := fmt.Errorf("No project name specified.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
+		}
+
+		if upmReq.HumanName != nil && len(*upmReq.HumanName) == 0 {
 			err := fmt.Errorf("No project name specified.")
 			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
@@ -194,7 +272,9 @@ func (service Service) UpdateProjectMetadata() *Endpoint {
 			return APIError{http.StatusServiceUnavailable, WRITE_DB_ERROR, NewServerError(err)}
 		}
 
-		SuccessfulResponse(writer, request, []byte("{'message': 'updated project successfully.'"))
+		if err = SuccessfulResponseJson(writer, request, APIMessage{"Updated project successfully."}); err != nil {
+			return APIError{http.StatusInternalServerError, JSON_UNMARSHAL_ERROR, NewServerError(err)}
+		}
 
 		GlobalCache.InvalidateAll()
 		return nil
@@ -202,7 +282,7 @@ func (service Service) UpdateProjectMetadata() *Endpoint {
 }
 
 // Endpoint that uploads one or more images with attached tags for a particular solution, to S3.
-func (service Service) PostAsset() *Endpoint {
+func (service Service) PostAssetEndpoint() *Endpoint {
 
 	type PostAssetRequest struct {
 		Asset Asset `json:"asset"`
@@ -272,7 +352,7 @@ func (service Service) PostAsset() *Endpoint {
 	})
 }
 
-func (service Service) PutDocument() *Endpoint {
+func (service Service) PutDocumentEndpoint() *Endpoint {
 
 	type PutDocumentRequest struct {
 		Text   *string `json:"text"`
@@ -337,12 +417,15 @@ func (service Service) PutDocument() *Endpoint {
 			return APIError{http.StatusServiceUnavailable, WRITE_DB_ERROR, NewServerError(err)}
 		}
 
-		SuccessfulResponse(writer, request, []byte("{'message': 'document modified successfully.'"))
+		if err = SuccessfulResponseJson(writer, request, APIMessage{"Updated document successfully."}); err != nil {
+			return APIError{http.StatusInternalServerError, JSON_UNMARSHAL_ERROR, NewServerError(err)}
+		}
+
 		return nil
 	})
 }
 
-func (service Service) PostDocument() *Endpoint {
+func (service Service) PostDocumentEndpoint() *Endpoint {
 
 	type PostDocumentRequest struct {
 		Slug   *string `json:"slug"`
@@ -406,7 +489,7 @@ func (service Service) PostDocument() *Endpoint {
 	})
 }
 
-func (service Service) DeleteDocument() *Endpoint {
+func (service Service) DeleteDocumentEndpoint() *Endpoint {
 	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		variables := mux.Vars(request)
 		idOrSlug, ok := variables["idOrSlug"]

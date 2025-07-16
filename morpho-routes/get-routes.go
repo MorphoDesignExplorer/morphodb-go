@@ -24,7 +24,7 @@ func GetProjects(variables map[string]string, service Service) ([]Project, error
 
 	projectName, singularRequest := variables["project"]
 
-	db, err := StartConn(service)
+	db, err := service.GetDB()
 	if err != nil {
 		return nil, NewServerError(err)
 	}
@@ -129,6 +129,7 @@ func GetSolutions(variables map[string]string, service Service, urlGenerator fun
 func (service Service) GetProjectEndpoint() *Endpoint {
 	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
 		variables := mux.Vars(request) // map that may or may not have the key 'project'
+
 		projectSet, err := GetProjects(variables, service)
 		if err != nil {
 			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}

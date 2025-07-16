@@ -107,17 +107,22 @@ func SetupRouter() *mux.Router {
 	dataRouter.HandleFunc("/", multiplexRoute(
 		map[string]http.HandlerFunc{
 			"GET":  service.GetProjectEndpoint().Finalize(),
-			"POST": service.PostProjectZip(), // TODO add authentication middleware
-			"PUT":  service.UpdateProjectMetadata().AddMiddleware(AuthMiddleware(morphoroutes.CAN_UPDATE)).Finalize(),
+			"POST": service.PostProjectZip().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE)).Finalize(),
+			"PUT":  service.UpdateProjectMetadataEndpoint().AddMiddleware(AuthMiddleware(morphoroutes.CAN_UPDATE)).Finalize(),
 		},
 	)).Methods("GET", "POST", "PUT")
 
-	dataRouter.HandleFunc("/{project}/", service.GetProjectEndpoint().Finalize()).Methods("GET", "POST")
+	dataRouter.HandleFunc("/{project}/", multiplexRoute(
+		map[string]http.HandlerFunc{
+			"GET":    service.GetProjectEndpoint().Finalize(),
+			"DELETE": service.DeleteProjectEndpoint().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE)).Finalize(),
+		},
+	)).Methods("GET", "DELETE")
 	dataRouter.HandleFunc("/{project}/model/", service.GetSolutionEndpoint().Finalize()).Methods("GET")
 	dataRouter.HandleFunc("/{project}/model/{solution}/", multiplexRoute(
 		map[string]http.HandlerFunc{
 			"GET":  service.GetSolutionEndpoint().Finalize(),
-			"POST": service.PostAsset().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
+			"POST": service.PostAssetEndpoint().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
 		},
 	)).Methods("GET", "POST")
 
@@ -125,14 +130,14 @@ func SetupRouter() *mux.Router {
 	documentRouter.HandleFunc("/", multiplexRoute(
 		map[string]http.HandlerFunc{
 			"GET":  service.GetDocumentEndpoint().Finalize(),
-			"POST": service.PostDocument().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
+			"POST": service.PostDocumentEndpoint().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
 		},
 	)).Methods("GET", "POST")
 	documentRouter.HandleFunc("/{idOrSlug}/", multiplexRoute(
 		map[string]http.HandlerFunc{
 			"GET":    service.GetDocumentEndpoint().Finalize(),
-			"PUT":    service.PutDocument().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
-			"DELETE": service.DeleteDocument().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
+			"PUT":    service.PutDocumentEndpoint().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
+			"DELETE": service.DeleteDocumentEndpoint().AddMiddleware(AuthMiddleware(morphoroutes.CAN_CREATE | morphoroutes.CAN_UPDATE)).Finalize(),
 		},
 	)).Methods("GET", "PUT", "DELETE")
 

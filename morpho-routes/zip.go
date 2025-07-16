@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path"
@@ -27,10 +28,15 @@ func IsDir(filename string) bool {
 	return filename[len(filename)-1] == os.PathSeparator
 }
 
-func MakeTree(zippath string) (map[string]FileTuple, error) {
+func MakeTree(multipartFile *multipart.FileHeader) (map[string]FileTuple, error) {
 	files := make(map[string]FileTuple)
 
-	arc, err := zip.OpenReader(zippath)
+	fileObj, err := multipartFile.Open()
+	if err != nil {
+		return nil, NewServerError(err)
+	}
+
+	arc, err := zip.NewReader(fileObj, multipartFile.Size)
 	if err != nil {
 		return nil, NewServerError(err)
 	}
@@ -126,7 +132,7 @@ func unpackAndUploadToLocal(file *zip.File, name string) (string, error) {
 				fmt.Errorf("could not write complete file: %w", err),
 			)
 		}
-		return mime.Extension(), nil
+		return name + mime.Extension(), nil
 	} else {
 		return "", NewServerError(err)
 	}
@@ -157,7 +163,7 @@ func unpackAndUploadToS3(file *zip.File, name string) (string, error) {
 		ContentType: aws.String(mime.String()),
 	})
 
-	return mime.Extension(), err
+	return fmt.Sprintf("assets/%s%s", name, mime.Extension()), err
 }
 
 // Local function for interop with uploaded database
@@ -167,130 +173,158 @@ func getMetadata(db *sql.DB, projectName string) (m Metadata, err error) {
 	return
 }
 
-func ClearWD() error {
-	err := os.RemoveAll("./temp")
+func UploadProject(service Service, file *multipart.FileHeader) (projectName string, err error) {
+	tree, err := MakeTree(file)
 	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func UploadProject(service Service) (err error) {
-	tree, err := MakeTree("./test.zip")
-	if err != nil {
-		return APIError{http.StatusInternalServerError, "Could not open zip file for reading.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Could not open zip file for reading.", NewServerError(err)}
 	}
 
+	//
 	// create local directory for importing the db file
+	//
 
 	// TODO create a random temp directory for file ops
 
-	err = ClearWD()
+	randDir := "./temp" + randString(8)
+
+	err = os.Mkdir(randDir, 0777)
 	if err != nil {
-		return APIError{http.StatusInternalServerError, "Could not clear temporary working directory.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Could not create temporary working directory.", NewServerError(err)}
 	}
 
-	err = os.Mkdir("./temp", 0777)
-	if err != nil {
-		return APIError{http.StatusInternalServerError, "Could not create temporary working directory.", NewServerError(err)}
-	}
+	defer func() {
+		removeErr := os.RemoveAll(randDir)
+		if removeErr != nil {
+			removeErr = APIError{http.StatusInternalServerError, "Could not clear temporary working directory.", NewServerError(err)}
+		}
 
+		if err == nil {
+			err = removeErr
+		}
+	}()
+
+	//
 	// extract imported db into local directory
+	//
 
-	filename, err := unpackItem(tree["solutions.db"].file, "./temp")
+	var solutionDbPath string = ""
+	var prefix string = ""
+	for key := range tree {
+		if strings.Contains(key, "solutions.db") {
+			solutionDbPath = key
+			prefix = path.Dir(key)
+		}
+	}
+
+	if solutionDbPath == "" {
+		err = fmt.Errorf("Could not find solution DB within zip.")
+		return "", APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
+	}
+
+	filename, err := unpackItem(tree[solutionDbPath].file, randDir)
 	if err != nil {
-		return APIError{http.StatusInternalServerError, "Could not extract DB from zip file.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Could not extract DB from zip file.", NewServerError(err)}
 	}
 
 	// get handles to temporary and permanent db
 
 	tempdb, err := sql.Open(GetDriver(), fmt.Sprintf("file:%s", filename))
 	if err != nil {
-		return APIError{http.StatusInternalServerError, "Could not access imported database.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Could not access imported database.", NewServerError(err)}
 	}
 
 	realdb, err := StartConn(service)
 	if err != nil {
-		return APIError{http.StatusInternalServerError, "Could not access internal database.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Could not access internal database.", NewServerError(err)}
 	}
 
+	//
 	// start transactions
+	//
 
 	temptx, err := tempdb.Begin()
 	if err != nil {
-		return APIError{http.StatusInternalServerError, "Could not access imported database.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Could not access imported database.", NewServerError(err)}
 	}
 	defer temptx.Rollback()
 
 	realtx, err := realdb.Begin()
 	if err != nil {
-		return APIError{http.StatusInternalServerError, "Could not access internal database.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Could not access internal database.", NewServerError(err)}
 	}
 	defer realtx.Rollback()
 
+	//
 	// insert project and associated solutions
+	//
 
 	projects, err := GetAllProjects(tempdb)
 	if err != nil {
-		return APIError{http.StatusInternalServerError, "Querying imported database failed.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Querying imported database failed.", NewServerError(err)}
 	}
 
-	projects[0].Create(realtx)
+	if err = projects[0].Create(realtx); err != nil {
+		return "", APIError{http.StatusServiceUnavailable, "Could not insert project into database.", NewServerError(err)}
+	}
 
 	solutions, err := GetAllSolutions(temptx, projects[0].ProjectName)
 	if err != nil {
-		return APIError{http.StatusInternalServerError, "Querying imported database failed.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Querying imported database failed.", NewServerError(err)}
 	}
 
 	solutionSet := SolutionSet(solutions)
 	err = solutionSet.Create(realtx, projects[0].ProjectName)
 	if err != nil {
-		return APIError{http.StatusInternalServerError, "Inserting records into internal database failed.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Inserting records into internal database failed.", NewServerError(err)}
 	}
 
 	assets, err := getAssets(temptx)
 	if err != nil {
-		return APIError{http.StatusInternalServerError, "Querying imported database failed.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Querying imported database failed.", NewServerError(err)}
 	}
 
+	//
 	// insert assets
+	//
 
 	for _, asset := range assets {
 		randomName := fmt.Sprintf("%s_%s", asset.SolutionId, randString(7))
-		s3Url, err := unpackAndUploadToLocal(tree[strings.ReplaceAll(asset.File, "\\", string(filepath.Separator))].file, randomName)
+		var s3Url string
+		if service.ENVIRONMENT == "prod" {
+			s3Url, err = unpackAndUploadToS3(tree[path.Join(prefix, strings.ReplaceAll(asset.File, "\\", string(filepath.Separator)))].file, randomName)
+		} else {
+			s3Url, err = unpackAndUploadToLocal(tree[path.Join(prefix, strings.ReplaceAll(asset.File, "\\", string(filepath.Separator)))].file, randomName)
+		}
 		if err != nil {
-			return APIError{http.StatusInternalServerError, "Could not upload an asset.", NewServerError(err)}
+			return "", APIError{http.StatusInternalServerError, "Could not upload an asset.", NewServerError(err)}
 		}
 
 		a := Asset{Tag: asset.Tag, File: s3Url}
-		a.Create(realtx, asset.SolutionId)
+		if err = a.Create(realtx, asset.SolutionId); err != nil {
+			return "", APIError{http.StatusInternalServerError, "Could not insert asset into the database.", NewServerError(err)}
+		}
 	}
 
+	//
 	// insert metadata
+	//
 
 	metadata, err := getMetadata(tempdb, projects[0].ProjectName)
 	if err != nil {
-		return APIError{http.StatusInternalServerError, "Could not extract metadata from imported database.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Could not extract metadata from imported database.", NewServerError(err)}
 	}
 
-	err = metadata.Create(realtx, projects[0].ProjectName)
-	if err != nil {
-		return APIError{http.StatusInternalServerError, "Could not insert imported metadata into internal database.", NewServerError(err)}
+	if err = metadata.Create(realtx, projects[0].ProjectName); err != nil {
+		return "", APIError{http.StatusInternalServerError, "Could not insert imported metadata into internal database.", NewServerError(err)}
 	}
 
+	//
 	// wrap up
+	//
 
-	err = realtx.Commit()
-	if err != nil {
-		return APIError{http.StatusInternalServerError, "Could not commit transaction on internal database.", NewServerError(err)}
+	if err = realtx.Commit(); err != nil {
+		return "", APIError{http.StatusInternalServerError, "Could not commit transaction on internal database.", NewServerError(err)}
 	}
 
-	fmt.Println("done")
-
-	err = ClearWD()
-	if err != nil {
-		return APIError{http.StatusInternalServerError, "Could not clear temporary working directory.", NewServerError(err)}
-	}
-
-	return nil
+	return projects[0].ProjectName, nil
 }
