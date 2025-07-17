@@ -70,9 +70,6 @@ func GetProjects(variables map[string]string, service Service) ([]Project, error
 //
 // Returns the set of solutions, or an error.
 func GetSolutions(variables map[string]string, service Service, urlGenerator func(string) string) ([]Solution, error) {
-	broadQuery := "SELECT solution.id, solution.scoped_id, parameters, output_parameters, tag, file FROM solution, asset WHERE asset.solution_id = solution.id AND solution.project_name = ?"
-	constrictedQuery := "SELECT solution.id, solution.scoped_id, parameters, output_parameters, tag, file FROM solution, asset WHERE asset.solution_id = solution.id AND solution.project_name = ? AND solution.id = ?"
-
 	projectName := variables["project"]
 	solutionId, singularRequest := variables["solution"]
 
@@ -82,45 +79,27 @@ func GetSolutions(variables map[string]string, service Service, urlGenerator fun
 	}
 	defer db.Close()
 
-	var result *sql.Rows
-	if singularRequest {
-		result, err = db.Query(constrictedQuery, projectName, solutionId)
-	} else {
-		result, err = db.Query(broadQuery, projectName)
-	}
+	tx, err := db.Begin()
 	if err != nil {
 		return nil, NewServerError(err)
 	}
-	defer result.Close()
+	defer tx.Rollback()
 
-	solutions := make(map[string]Solution)
-	for result.Next() {
-		var tempSolution Solution
-		var fileTag, fileUri string
-
-		err = result.Scan(&tempSolution.Id, &tempSolution.ScopedId, &tempSolution.Parameter, &tempSolution.OutputParameter, &fileTag, &fileUri)
+	var solutions []Solution
+	if singularRequest {
+		solution, err := GetSolution(tx, projectName, solutionId, &urlGenerator)
 		if err != nil {
 			return nil, NewServerError(err)
 		}
-
-		fileUri = urlGenerator(fileUri)
-
-		if solution, ok := solutions[tempSolution.Id]; ok {
-			solution.Assets = append(solution.Assets, Asset{Tag: fileTag, File: fileUri})
-			solutions[tempSolution.Id] = solution
-		} else {
-			tempSolution.Assets = make([]Asset, 0)
-			tempSolution.Assets = append(tempSolution.Assets, Asset{Tag: fileTag, File: fileUri})
-			solutions[tempSolution.Id] = tempSolution
+		solutions = []Solution{solution}
+	} else {
+		solutions, err = GetAllSolutions(tx, projectName, &urlGenerator)
+		if err != nil {
+			return nil, NewServerError(err)
 		}
 	}
 
-	solutionSet := make([]Solution, 0, len(solutions))
-	for _, solution := range solutions {
-		solutionSet = append(solutionSet, solution)
-	}
-
-	return solutionSet, nil
+	return SolutionSet(solutions), err
 }
 
 // GET method that returns either a singular project or all the projects.

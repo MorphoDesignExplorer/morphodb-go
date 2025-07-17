@@ -178,7 +178,7 @@ func UploadProject(service Service, file *multipart.FileHeader) (projectName str
 		return "", APIError{http.StatusServiceUnavailable, "Could not insert project into database.", NewServerError(err)}
 	}
 
-	solutions, err := GetAllSolutions(temptx, projects[0].ProjectName)
+	solutions, err := GetAllSolutions(temptx, projects[0].ProjectName, nil)
 	if err != nil {
 		return "", APIError{http.StatusInternalServerError, "Querying imported database failed.", NewServerError(err)}
 	}

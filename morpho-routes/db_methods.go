@@ -184,13 +184,68 @@ func (p *Project) Update(tx *sql.Tx) error {
 */
 
 /*
+ * Gets a singular solution by the solution id and the project.
+ *
+ * Takes tx: an SQL transaction, projectName: the name of the project, and solutionId: the id of a solution
+ *
+ * assetUrlGenerator is a pointer to a function that generates a url from an existing file uri. If you'd like to leave the fetched uri as it is, pass nil.
+ *
+ * Returns the fetched solution and an error, if there's any
+ */
+func GetSolution(tx *sql.Tx, projectName string, solutionId string, assetUrlGenerator *func(string) string) (Solution, error) {
+	var tempSol Solution
+
+	var urlGenerator func(string) string
+	if assetUrlGenerator != nil {
+		urlGenerator = *assetUrlGenerator
+	} else {
+		urlGenerator = func(fileuri string) string {
+			return fileuri
+		}
+	}
+
+	row := tx.QueryRow("SELECT id, scoped_id, parameters, output_parameters FROM solution WHERE project_name = ? AND id = ?", projectName, solutionId)
+	if err := row.Scan(&tempSol.Id, &tempSol.ScopedId, &tempSol.Parameter, &tempSol.OutputParameter); err != nil {
+		return Solution{}, NewServerError(err)
+	} else {
+		rows, err := tx.Query("SELECT asset.tag, asset.file FROM asset WHERE asset.solution_id = ?", tempSol.Id)
+		if err != nil {
+			return Solution{}, NewServerError(err)
+		}
+
+		for rows.Next() {
+			var tempAsset Asset
+			if err = rows.Scan(&tempAsset.Tag, &tempAsset.File); err != nil {
+				return Solution{}, NewServerError(err)
+			} else {
+				tempAsset.File = urlGenerator(tempAsset.File)
+				tempSol.Assets = append(tempSol.Assets, tempAsset)
+			}
+		}
+
+		return tempSol, nil
+	}
+}
+
+/*
  * A method to fetch a project's solutions and associated assets from a database.
  *
  * Takes tx, an SQL Transaction object and projectName, the name of the project.
  *
+ * assetUrlGenerator is a pointer to a function that generates a url from an existing file uri. If you'd like to leave the fetched uri as it is, pass nil.
+ *
  * Returns a slice of solutions and an error, if there's any.
  */
-func GetAllSolutions(tx *sql.Tx, projectName string) ([]Solution, error) {
+func GetAllSolutions(tx *sql.Tx, projectName string, assetUrlGenerator *func(string) string) ([]Solution, error) {
+	var urlGenerator func(string) string
+	if assetUrlGenerator != nil {
+		urlGenerator = *assetUrlGenerator
+	} else {
+		urlGenerator = func(fileuri string) string {
+			return fileuri
+		}
+	}
+
 	solutions := make([]Solution, 0)
 	rows, err := tx.Query("SELECT id, scoped_id, parameters, output_parameters FROM solution WHERE project_name = ?", projectName)
 	if err != nil {
@@ -222,6 +277,8 @@ func GetAllSolutions(tx *sql.Tx, projectName string) ([]Solution, error) {
 		if err != nil {
 			return nil, NewServerError(err)
 		}
+
+		tempAsset.File = urlGenerator(tempAsset.File)
 
 		if offset, ok := idsToOffset[solutionId]; ok {
 			solutions[offset].Assets = append(solutions[offset].Assets, tempAsset)
