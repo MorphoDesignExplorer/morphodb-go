@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strconv"
+	"os"
 	"strings"
 	"time"
 
@@ -102,6 +102,15 @@ func SetupRouter() *mux.Router {
 	topRouter := mux.NewRouter()
 	topRouter.Use(RouteLoggerMiddleware)
 
+	if service.ENVIRONMENT == "dev" {
+		pwd, err := os.Getwd()
+		if err != nil {
+			panic(err)
+		}
+
+		topRouter.PathPrefix("/assets/").Handler(http.FileServer(http.Dir(pwd)))
+	}
+
 	dataRouter := topRouter.PathPrefix("/project").Subrouter()
 	dataRouter.Use(morphoroutes.CacheMiddleware)
 	dataRouter.HandleFunc("/", multiplexRoute(
@@ -150,7 +159,6 @@ func SetupRouter() *mux.Router {
 }
 
 func main() {
-
 	service, err := morphoroutes.StartService()
 	if err != nil {
 		log.Print(err)
@@ -164,7 +172,6 @@ func main() {
 	}
 
 	topRouter := SetupRouter()
-	port := 8000
-	log.Println("listening on port", port)
-	log.Fatal(http.ListenAndServe(":"+strconv.Itoa(port), topRouter))
+	log.Println("listening on port", service.PORT)
+	log.Fatal(http.ListenAndServe(":"+service.PORT, topRouter))
 }

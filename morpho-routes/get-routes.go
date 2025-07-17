@@ -151,7 +151,14 @@ func (service Service) GetProjectEndpoint() *Endpoint {
 // Returns an Endpoint object.
 func (service Service) GetSolutionEndpoint() *Endpoint {
 	urlGenerator := func(filename string) string {
-		return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", service.AWS_STORAGE_BUCKET_NAME, service.AWS_REGION, filename)
+		switch service.ENVIRONMENT {
+		case "prod":
+			return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", service.AWS_STORAGE_BUCKET_NAME, service.AWS_REGION, filename)
+		case "dev":
+			return fmt.Sprintf("http://localhost:%s/%s", service.PORT, filename)
+		default:
+			return ""
+		}
 	}
 
 	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {

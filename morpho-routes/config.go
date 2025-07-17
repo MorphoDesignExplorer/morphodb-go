@@ -7,6 +7,7 @@ import (
 )
 
 type Service struct {
+	PORT                    string // Default port to use
 	DB_STRING               string // where is the SQLite database?
 	AWS_REGION              string // what is the aws region we're running on?
 	AWS_STORAGE_BUCKET_NAME string // what is the name of the storage bucket?
@@ -22,6 +23,11 @@ func StartService() (Service, error) {
 	result.DB_STRING = os.Getenv("DB_STRING")
 	if len(result.DB_STRING) == 0 {
 		return result, errors.New("DB_STRING was not set")
+	}
+
+	result.PORT = os.Getenv("PORT")
+	if len(result.PORT) == 0 {
+		result.PORT = "8000"
 	}
 
 	result.AWS_REGION = os.Getenv("AWS_REGION")
