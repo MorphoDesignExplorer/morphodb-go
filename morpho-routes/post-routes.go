@@ -3,7 +3,6 @@ package morphoroutes
 import (
 	"encoding/json"
 	"fmt"
-	"mime/multipart"
 	"net/http"
 
 	"github.com/gorilla/mux"
@@ -324,7 +323,7 @@ func (service Service) PostAssetEndpoint() *Endpoint {
 			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
-		files := make(map[string]*multipart.FileHeader)
+		files := make(map[string]Openable)
 
 		// validate that there's only one file uploaded per tag
 		for tag, handle := range request.MultipartForm.File {
@@ -336,13 +335,23 @@ func (service Service) PostAssetEndpoint() *Endpoint {
 				err := fmt.Errorf("tag %s had no files uploaded to it.", tag)
 				return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 			}
-			files[tag] = handle[0]
+			files[tag] = (*OpenableMultipartFile)(handle[0])
 		}
 
-		err = CreateAssets(db, projectAssets, solutionId, scopedId, files)
+		tx, err := db.Begin()
+		if err != nil {
+			return APIError{http.StatusInternalServerError, "Could not start database transaction.", NewServerError(err)}
+		}
+		defer tx.Rollback()
+
+		err = CreateAssets(tx, projectAssets, solutionId, files)
 		if err != nil {
 			LogError(err)
 			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
+		}
+
+		if err = tx.Commit(); err != nil {
+			return APIError{http.StatusInternalServerError, "Could not commit database transaction.", NewServerError(err)}
 		}
 
 		SuccessfulResponse(writer, request, []byte("{'message': 'updated assets successfully.'"))

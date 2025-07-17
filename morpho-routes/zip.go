@@ -2,8 +2,6 @@ package morphoroutes
 
 import (
 	"archive/zip"
-	"bytes"
-	"context"
 	"database/sql"
 	"fmt"
 	"io"
@@ -13,10 +11,6 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/gabriel-vasile/mimetype"
 )
 
 type FileTuple struct {
@@ -36,12 +30,12 @@ func MakeTree(multipartFile *multipart.FileHeader) (map[string]FileTuple, error)
 		return nil, NewServerError(err)
 	}
 
-	arc, err := zip.NewReader(fileObj, multipartFile.Size)
+	archive, err := zip.NewReader(fileObj, multipartFile.Size)
 	if err != nil {
 		return nil, NewServerError(err)
 	}
 
-	for _, f := range arc.File {
+	for _, f := range archive.File {
 		files[f.Name] = FileTuple{
 			name: f.Name,
 			file: f,
@@ -87,85 +81,6 @@ type TempAsset struct {
 	SolutionId string
 }
 
-func getAssets(tx *sql.Tx) ([]TempAsset, error) {
-	assets := make([]TempAsset, 0)
-
-	rows, err := tx.Query("SELECT file, tag, solution_id FROM asset")
-	if err != nil {
-		return nil, err
-	}
-
-	for rows.Next() {
-		tempAsset := TempAsset{}
-		err = rows.Scan(&tempAsset.File, &tempAsset.Tag, &tempAsset.SolutionId)
-		if err != nil {
-			return nil, err
-		}
-		assets = append(assets, tempAsset)
-	}
-
-	return assets, nil
-}
-
-/*
-Uncompresses a file within a zipped folder and uploads it to a local directory.
-
-Returns the filepath where the uncompressed file can be found, along with an error if there's any.
-*/
-func unpackAndUploadToLocal(file *zip.File, name string) (string, error) {
-	rc, err := file.Open()
-	if err != nil {
-		return "", NewServerError(err)
-	}
-
-	contents, err := io.ReadAll(rc)
-	if err != nil {
-		return "", NewServerError(err)
-	}
-
-	mime := mimetype.Detect(contents)
-
-	if writeHandle, err := os.OpenFile(fmt.Sprintf("assets/%s%s", name, mime.Extension()), os.O_CREATE|os.O_RDWR, 0644); err == nil {
-		n, err := writeHandle.Write(contents)
-		if n != len(contents) || err != nil {
-			return "", NewServerError(
-				fmt.Errorf("could not write complete file: %w", err),
-			)
-		}
-		return name + mime.Extension(), nil
-	} else {
-		return "", NewServerError(err)
-	}
-}
-
-func unpackAndUploadToS3(file *zip.File, name string) (string, error) {
-	rc, err := file.Open()
-	if err != nil {
-		return "", err
-	}
-
-	contents, err := io.ReadAll(rc)
-	if err != nil {
-		return "", err
-	}
-
-	mime := mimetype.Detect(contents)
-
-	client, err := CreateS3Client()
-	if err != nil {
-		return "", nil
-	}
-
-	_, err = client.PutObject(context.TODO(), &s3.PutObjectInput{
-		Bucket:      aws.String("morpho-images"),
-		Key:         aws.String(fmt.Sprintf("assets/%s%s", name, mime.Extension())),
-		Body:        bytes.NewReader(contents),
-		ContentType: aws.String(mime.String()),
-	})
-
-	return fmt.Sprintf("assets/%s%s", name, mime.Extension()), err
-}
-
 // Local function for interop with uploaded database
 func getMetadata(db *sql.DB, projectName string) (m Metadata, err error) {
 	row := db.QueryRow("SELECT captions, human_name, slug, text FROM metadata WHERE project_name=?", projectName)
@@ -182,8 +97,6 @@ func UploadProject(service Service, file *multipart.FileHeader) (projectName str
 	//
 	// create local directory for importing the db file
 	//
-
-	// TODO create a random temp directory for file ops
 
 	randDir := "./temp" + randString(8)
 
@@ -226,7 +139,9 @@ func UploadProject(service Service, file *multipart.FileHeader) (projectName str
 		return "", APIError{http.StatusInternalServerError, "Could not extract DB from zip file.", NewServerError(err)}
 	}
 
-	// get handles to temporary and permanent db
+	//
+	// get handles to temporary and permanent db and start transactions
+	//
 
 	tempdb, err := sql.Open(GetDriver(), fmt.Sprintf("file:%s", filename))
 	if err != nil {
@@ -237,10 +152,6 @@ func UploadProject(service Service, file *multipart.FileHeader) (projectName str
 	if err != nil {
 		return "", APIError{http.StatusInternalServerError, "Could not access internal database.", NewServerError(err)}
 	}
-
-	//
-	// start transactions
-	//
 
 	temptx, err := tempdb.Begin()
 	if err != nil {
@@ -278,30 +189,21 @@ func UploadProject(service Service, file *multipart.FileHeader) (projectName str
 		return "", APIError{http.StatusInternalServerError, "Inserting records into internal database failed.", NewServerError(err)}
 	}
 
-	assets, err := getAssets(temptx)
-	if err != nil {
-		return "", APIError{http.StatusInternalServerError, "Querying imported database failed.", NewServerError(err)}
-	}
-
 	//
 	// insert assets
 	//
 
-	for _, asset := range assets {
-		randomName := fmt.Sprintf("%s_%s", asset.SolutionId, randString(7))
-		var s3Url string
-		if service.ENVIRONMENT == "prod" {
-			s3Url, err = unpackAndUploadToS3(tree[path.Join(prefix, strings.ReplaceAll(asset.File, "\\", string(filepath.Separator)))].file, randomName)
-		} else {
-			s3Url, err = unpackAndUploadToLocal(tree[path.Join(prefix, strings.ReplaceAll(asset.File, "\\", string(filepath.Separator)))].file, randomName)
-		}
-		if err != nil {
-			return "", APIError{http.StatusInternalServerError, "Could not upload an asset.", NewServerError(err)}
+	for _, solution := range solutionSet {
+		fileMap := make(map[string]Openable)
+		for _, asset := range solution.Assets {
+			fileMap[asset.Tag] = (*OpenableZipFile)(tree[path.Join(prefix, strings.ReplaceAll(asset.File, "\\", string(filepath.Separator)))].file)
 		}
 
-		a := Asset{Tag: asset.Tag, File: s3Url}
-		if err = a.Create(realtx, asset.SolutionId); err != nil {
-			return "", APIError{http.StatusInternalServerError, "Could not insert asset into the database.", NewServerError(err)}
+		// fmt.Println(projects[0].Assets, fileMap)
+
+		err = CreateAssets(realtx, projects[0].Assets, solution.Id, fileMap)
+		if err != nil {
+			return "", APIError{http.StatusInternalServerError, "Could not upload assets to database and storage bucket.", NewServerError(err)}
 		}
 	}
 

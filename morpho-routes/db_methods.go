@@ -1,6 +1,7 @@
 package morphoroutes
 
 import (
+	"archive/zip"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -182,20 +183,49 @@ func (p *Project) Update(tx *sql.Tx) error {
 	[]Solution Methods
 */
 
+/*
+ * A method to fetch a project's solutions and associated assets from a database.
+ *
+ * Takes tx, an SQL Transaction object and projectName, the name of the project.
+ *
+ * Returns a slice of solutions and an error, if there's any.
+ */
 func GetAllSolutions(tx *sql.Tx, projectName string) ([]Solution, error) {
 	solutions := make([]Solution, 0)
-	rows, err := tx.Query("SELECT id, scoped_id, parameters, output_parameters FROM solution")
+	rows, err := tx.Query("SELECT id, scoped_id, parameters, output_parameters FROM solution WHERE project_name = ?", projectName)
 	if err != nil {
-		return nil, err
+		return nil, NewServerError(err)
 	}
+
+	idsToOffset := make(map[string]int)
 
 	for rows.Next() {
 		var tempSolution Solution
 		err = rows.Scan(&tempSolution.Id, &tempSolution.ScopedId, &tempSolution.Parameter, &tempSolution.OutputParameter)
 		if err != nil {
-			return nil, err
+			return nil, NewServerError(err)
 		}
 		solutions = append(solutions, tempSolution)
+		idsToOffset[tempSolution.Id] = len(solutions) - 1
+	}
+	rows.Close()
+
+	rows, err = tx.Query("SELECT asset.tag, asset.file, asset.solution_id FROM asset WHERE asset.solution_id in (SELECT id FROM solution WHERE project_name = ?)", projectName)
+	if err != nil {
+		return nil, NewServerError(err)
+	}
+
+	for rows.Next() {
+		var tempAsset Asset
+		var solutionId string
+		err = rows.Scan(&tempAsset.Tag, &tempAsset.File, &solutionId)
+		if err != nil {
+			return nil, NewServerError(err)
+		}
+
+		if offset, ok := idsToOffset[solutionId]; ok {
+			solutions[offset].Assets = append(solutions[offset].Assets, tempAsset)
+		}
 	}
 
 	return solutions, nil
@@ -360,18 +390,13 @@ This method does not use any AWS credentials, and relies on the instance having 
 
 Returns an error if any step of the process fails, and the file's extension.
 */
-func uploadAssetS3(fileHeader *multipart.FileHeader, name string) (string, error) {
-	file, err := fileHeader.Open()
+func uploadAssetS3(file io.ReadCloser, name string) (string, error) {
+	contents, err := io.ReadAll(file)
 	if err != nil {
 		return "", err
 	}
 
-	mime, err := mimetype.DetectReader(file)
-	if err != nil {
-		return "", err
-	}
-
-	file.Seek(0, io.SeekStart) // Detect reader consumes the beginning of the file. So we need to reset the head of the file back to the start.
+	mime := mimetype.Detect(contents)
 
 	client, err := CreateS3Client()
 	if err != nil {
@@ -408,28 +433,17 @@ TODO: Restrict MIME types sensibly.
 
 Returns an error if any step of the process fails, and the file's extension.
 */
-func uploadAssetsLocal(fileHeader *multipart.FileHeader, name string) (string, error) {
-	file, err := fileHeader.Open()
+func uploadAssetsLocal(file io.ReadCloser, name string) (string, error) {
+	contents, err := io.ReadAll(file)
 	if err != nil {
 		return "", err
 	}
 
-	mime, err := mimetype.DetectReader(file)
-	if err != nil {
-		return "", err
-	}
-	file.Close()
-
-	file.Seek(0, io.SeekStart) // Detect reader consumes the beginning of the file. So we need to reset the head of the file back to the start.
+	mime := mimetype.Detect(contents)
 
 	if writeHandle, err := os.OpenFile(fmt.Sprintf("assets/%s%s", name, mime.Extension()), os.O_CREATE|os.O_RDWR, 0644); err == nil {
-		buffer, err := io.ReadAll(file)
-		if err != nil {
-			return "", err
-		}
-
-		n, err := writeHandle.Write(buffer)
-		if n != len(buffer) || err != nil {
+		n, err := writeHandle.Write(contents)
+		if n != len(contents) || err != nil {
 			return "", fmt.Errorf("could not write complete file: " + err.Error())
 		}
 		return mime.Extension(), nil
@@ -471,6 +485,22 @@ func (a *Asset) Create(tx *sql.Tx, solutionId string) error {
 	return nil
 }
 
+type Openable interface {
+	OpenFile() (io.ReadCloser, error)
+}
+
+type OpenableZipFile zip.File
+
+func (o *OpenableZipFile) OpenFile() (io.ReadCloser, error) {
+	return (*zip.File)(o).Open()
+}
+
+type OpenableMultipartFile multipart.FileHeader
+
+func (o *OpenableMultipartFile) OpenFile() (io.ReadCloser, error) {
+	return (*multipart.FileHeader)(o).Open()
+}
+
 /*
 Uploads the provided assets to S3 or the local filesystem and adds records into the database.
 
@@ -480,18 +510,12 @@ filetags is a ProjectAssetField list which specifies the tags allowed.
 
 solutionId specifies which solution the assets are going to be associated with
 
-files is a cleaned multipart form. (i.e. each map key contains only uploaded file)
+files is either a map of compressed zip files, or a map of multipart form files (each map key contains only uploaded file.)
 
 Returns an error if any step of the process fails.
 */
-func CreateAssets(db *sql.DB, filetags []ProjectAssetField, solutionId string, scopedId int, files map[string]*multipart.FileHeader) error {
+func CreateAssets(tx *sql.Tx, filetags []ProjectAssetField, solutionId string, files map[string]Openable) error {
 	// Uploads a file associated with an asset to the storage bucket.
-
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 
 	tagMap := make(map[string]bool)
 	for _, fileAsset := range filetags {
@@ -501,7 +525,7 @@ func CreateAssets(db *sql.DB, filetags []ProjectAssetField, solutionId string, s
 	// check if all the provided tags in the form exist. Terminate otherwise.
 	for tag := range files {
 		if _, ok := tagMap[tag]; !ok {
-			return fmt.Errorf("tag %s does not exist on the solution", tag)
+			delete(files, tag)
 		}
 	}
 
@@ -511,24 +535,34 @@ func CreateAssets(db *sql.DB, filetags []ProjectAssetField, solutionId string, s
 			return err
 		}
 
-		randomName := fmt.Sprintf("%d_%s", scopedId, randString(7))
+		randomName := fmt.Sprintf("%s_%s", solutionId, randString(7))
 
 		config, err := StartService()
 		if err != nil {
 			return err
 		}
 
+		file, err := handle.OpenFile()
+		if err != nil {
+			return err
+		}
+
 		var extension string
 		if config.ENVIRONMENT == "prod" {
-			extension, err = uploadAssetS3(handle, randomName)
+			extension, err = uploadAssetS3(file, randomName)
 			if err != nil {
 				return err
 			}
 		} else {
-			extension, err = uploadAssetsLocal(handle, randomName)
+			extension, err = uploadAssetsLocal(file, randomName)
 			if err != nil {
 				return err
 			}
+		}
+
+		err = file.Close()
+		if err != nil {
+			return err
 		}
 
 		if _, err = tx.Exec(
@@ -540,10 +574,6 @@ func CreateAssets(db *sql.DB, filetags []ProjectAssetField, solutionId string, s
 		); err != nil {
 			return err
 		}
-	}
-
-	if err = tx.Commit(); err != nil {
-		return err
 	}
 
 	return nil
