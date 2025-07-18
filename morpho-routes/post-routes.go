@@ -33,7 +33,7 @@ func (service Service) PostProjectZip() *Endpoint {
 			if contentTypeHeader, ok := files[0].Header["Content-Type"]; ok && contentTypeHeader[0] == "application/zip" {
 				projectName, err := UploadProject(service, files[0])
 				if err != nil {
-					return APIError{http.StatusInternalServerError, "Could not upload zip.", NewServerError(err)}
+					return err
 				}
 
 				if err = SuccessfulResponseJson(writer, request, PostProjectZipResponse{Message: "Uploaded project successfully.", ProjectName: projectName}); err != nil {
@@ -512,7 +512,7 @@ func (service Service) DeleteDocumentEndpoint() *Endpoint {
 			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
-		db, err := StartConn(service)
+		db, err := service.GetDB()
 		if err != nil {
 			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
@@ -537,7 +537,9 @@ func (service Service) DeleteDocumentEndpoint() *Endpoint {
 			return APIError{http.StatusServiceUnavailable, WRITE_DB_ERROR, NewServerError(err)}
 		}
 
-		SuccessfulResponse(writer, request, []byte("{'message': 'document deleted successfully.'"))
+		if err = SuccessfulResponseJson(writer, request, APIMessage{"Document delete successfully."}); err != nil {
+			return APIError{http.StatusServiceUnavailable, JSON_MARSHAL_ERROR, NewServerError(err)}
+		}
 		return nil
 	})
 }

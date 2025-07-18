@@ -76,7 +76,6 @@ db is the database object.
 Returns an error if the database write fails.
 */
 func (p *Project) Delete(tx *sql.Tx) error {
-	fmt.Println(p.ProjectName)
 	_, err := tx.Exec("DELETE FROM asset WHERE asset.solution_id IN (SELECT solution.id FROM solution WHERE solution.project_name = ?)", p.ProjectName)
 	if err != nil {
 		return NewServerError(err)

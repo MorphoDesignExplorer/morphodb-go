@@ -123,20 +123,20 @@ func UploadProject(service Service, file *multipart.FileHeader) (projectName str
 	var solutionDbPath string = ""
 	var prefix string = ""
 	for key := range tree {
-		if strings.Contains(key, "solutions.db") {
+		if strings.Contains(key, ".db") {
 			solutionDbPath = key
 			prefix = path.Dir(key)
 		}
 	}
 
 	if solutionDbPath == "" {
-		err = fmt.Errorf("Could not find solution DB within zip.")
+		err = fmt.Errorf("Could not find solutions.db within zip. Please include it when compressing the targeted folder.")
 		return "", APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 	}
 
 	filename, err := unpackItem(tree[solutionDbPath].file, randDir)
 	if err != nil {
-		return "", APIError{http.StatusInternalServerError, "Could not extract DB from zip file.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Could not extract solutions.db from zip file.", NewServerError(err)}
 	}
 
 	//
@@ -145,23 +145,23 @@ func UploadProject(service Service, file *multipart.FileHeader) (projectName str
 
 	tempdb, err := sql.Open(GetDriver(), fmt.Sprintf("file:%s", filename))
 	if err != nil {
-		return "", APIError{http.StatusInternalServerError, "Could not access imported database.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Could not open solutions.db.", NewServerError(err)}
 	}
 
 	realdb, err := StartConn(service)
 	if err != nil {
-		return "", APIError{http.StatusInternalServerError, "Could not access internal database.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Could not open internal database.", NewServerError(err)}
 	}
 
 	temptx, err := tempdb.Begin()
 	if err != nil {
-		return "", APIError{http.StatusInternalServerError, "Could not access imported database.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Could not start a transaction within solutions.db.", NewServerError(err)}
 	}
 	defer temptx.Rollback()
 
 	realtx, err := realdb.Begin()
 	if err != nil {
-		return "", APIError{http.StatusInternalServerError, "Could not access internal database.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Could not start a transaction within internal database.", NewServerError(err)}
 	}
 	defer realtx.Rollback()
 
@@ -171,22 +171,22 @@ func UploadProject(service Service, file *multipart.FileHeader) (projectName str
 
 	projects, err := GetAllProjects(tempdb)
 	if err != nil {
-		return "", APIError{http.StatusInternalServerError, "Querying imported database failed.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Querying solutions.db failed.", NewServerError(err)}
 	}
 
 	if err = projects[0].Create(realtx); err != nil {
-		return "", APIError{http.StatusServiceUnavailable, "Could not insert project into database.", NewServerError(err)}
+		return "", APIError{http.StatusServiceUnavailable, "Could not insert project into internal database.", NewServerError(err)}
 	}
 
 	solutions, err := GetAllSolutions(temptx, projects[0].ProjectName, nil)
 	if err != nil {
-		return "", APIError{http.StatusInternalServerError, "Querying imported database failed.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Querying solutions.db failed.", NewServerError(err)}
 	}
 
 	solutionSet := SolutionSet(solutions)
 	err = solutionSet.Create(realtx, projects[0].ProjectName)
 	if err != nil {
-		return "", APIError{http.StatusInternalServerError, "Inserting records into internal database failed.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Could not insert solutions into internal database.", NewServerError(err)}
 	}
 
 	//
@@ -203,7 +203,7 @@ func UploadProject(service Service, file *multipart.FileHeader) (projectName str
 
 		err = CreateAssets(realtx, projects[0].Assets, solution.Id, fileMap)
 		if err != nil {
-			return "", APIError{http.StatusInternalServerError, "Could not upload assets to database and storage bucket.", NewServerError(err)}
+			return "", APIError{http.StatusInternalServerError, "Could not upload assets to internal database and storage bucket.", NewServerError(err)}
 		}
 	}
 
@@ -213,7 +213,7 @@ func UploadProject(service Service, file *multipart.FileHeader) (projectName str
 
 	metadata, err := getMetadata(tempdb, projects[0].ProjectName)
 	if err != nil {
-		return "", APIError{http.StatusInternalServerError, "Could not extract metadata from imported database.", NewServerError(err)}
+		return "", APIError{http.StatusInternalServerError, "Could not extract metadata from solutions.db.", NewServerError(err)}
 	}
 
 	if err = metadata.Create(realtx, projects[0].ProjectName); err != nil {
