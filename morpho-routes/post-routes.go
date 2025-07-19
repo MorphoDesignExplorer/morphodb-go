@@ -22,16 +22,18 @@ func (service Service) PostProjectZip() *Endpoint {
 	}
 
 	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
-		err := request.ParseMultipartForm(1024 * 1024 * 1024) // accept upto 1 gigabyte.
+		err := request.ParseMultipartForm(2 * 1024 * 1024 * 1024) // accept upto 2 gigabytes.
 		if err != nil {
 			return err
 		}
 
 		fileMap := request.MultipartForm.File
+		defer request.MultipartForm.RemoveAll()
 
 		if files, ok := fileMap["upload"]; ok {
 			if contentTypeHeader, ok := files[0].Header["Content-Type"]; ok && contentTypeHeader[0] == "application/zip" {
-				projectName, err := UploadProject(service, files[0])
+				file := files[0]
+				projectName, err := UploadProject(service, file)
 				if err != nil {
 					return err
 				}
