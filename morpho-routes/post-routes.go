@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path"
 
 	"github.com/gorilla/mux"
 )
@@ -21,36 +22,31 @@ func (service Service) PostProjectZip() *Endpoint {
 		ProjectName string `json:"project_name"`
 	}
 
+	type PostProjectZipRequest struct {
+		S3Uri *string `json:"s3uri"`
+	}
+
 	return NewEndpoint(func(writer http.ResponseWriter, request *http.Request) error {
-		err := request.ParseMultipartForm(2 * 1024 * 1024 * 1024) // accept upto 2 gigabytes.
+		reqObject := PostProjectZipRequest{}
+		decoder := json.NewDecoder(request.Body)
+		if err := decoder.Decode(&reqObject); err != nil {
+			return err
+		}
+
+		if reqObject.S3Uri == nil {
+			err := fmt.Errorf("s3Uri not present in request's JSON body.")
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
+		}
+
+		fmt.Println(path.Join(service.S3_MOUNTPOINT, *reqObject.S3Uri))
+
+		projectName, err := UploadProject(service, *reqObject.S3Uri)
 		if err != nil {
 			return err
 		}
 
-		fileMap := request.MultipartForm.File
-		defer request.MultipartForm.RemoveAll()
-
-		if files, ok := fileMap["upload"]; ok {
-			if contentTypeHeader, ok := files[0].Header["Content-Type"]; ok && contentTypeHeader[0] == "application/zip" {
-				file := files[0]
-				projectName, err := UploadProject(service, file)
-				if err != nil {
-					return err
-				}
-
-				if err = SuccessfulResponseJson(writer, request, PostProjectZipResponse{Message: "Uploaded project successfully.", ProjectName: projectName}); err != nil {
-					return APIError{http.StatusInternalServerError, JSON_MARSHAL_ERROR, NewServerError(err)}
-				}
-			} else if contentTypeHeader[0] != "application/zip" {
-				err := fmt.Errorf("File submitted was not a zip file.")
-				return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
-			} else if !ok {
-				err := fmt.Errorf("No file was submitted in the form field 'upload'.")
-				return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
-			}
-		} else {
-			err := fmt.Errorf("No file was submitted in the form field 'upload'.")
-			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
+		if err = SuccessfulResponseJson(writer, request, PostProjectZipResponse{Message: "Uploaded project successfully.", ProjectName: projectName}); err != nil {
+			return APIError{http.StatusInternalServerError, JSON_MARSHAL_ERROR, NewServerError(err)}
 		}
 
 		GlobalCache.InvalidateAll()

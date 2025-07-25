@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"path"
@@ -22,15 +21,15 @@ func IsDir(filename string) bool {
 	return filename[len(filename)-1] == os.PathSeparator
 }
 
-func MakeTree(multipartFile *multipart.FileHeader) (map[string]FileTuple, error) {
+func MakeTree(file *os.File) (map[string]FileTuple, error) {
 	files := make(map[string]FileTuple)
 
-	fileObj, err := multipartFile.Open()
+	finfo, err := file.Stat()
 	if err != nil {
 		return nil, NewServerError(err)
 	}
 
-	archive, err := zip.NewReader(fileObj, multipartFile.Size)
+	archive, err := zip.NewReader(file, finfo.Size())
 	if err != nil {
 		return nil, NewServerError(err)
 	}
@@ -88,7 +87,13 @@ func getMetadata(db *sql.DB, projectName string) (m Metadata, err error) {
 	return
 }
 
-func UploadProject(service Service, file *multipart.FileHeader) (projectName string, err error) {
+func UploadProject(service Service, s3Uri string) (projectName string, err error) {
+
+	file, err := os.Open(path.Join(service.S3_MOUNTPOINT, s3Uri))
+	if err != nil {
+		return "", APIError{http.StatusBadRequest, "Could not find uploaded zip in S3 bucket.", NewServerError(err)}
+	}
+
 	tree, err := MakeTree(file)
 	if err != nil {
 		return "", APIError{http.StatusInternalServerError, "Could not open zip file for reading.", NewServerError(err)}
