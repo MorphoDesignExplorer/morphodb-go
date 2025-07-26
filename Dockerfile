@@ -13,11 +13,13 @@ RUN apt-get install -y ./mount-s3.deb
 
 RUN rm ./mount-s3.db
 
-# setup mount-s3
+# mount s3 bucket locally
 
 RUN mkdir /morpho-temp/
 
-RUN mount-s3 "morpho-temp" /morpho-temp/
+RUN mount-s3 --read-only "morpho-temp" /morpho-temp/
+
+# build go binary
 
 RUN go build -o /bin/main-bin server.go
 
