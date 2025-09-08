@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"path"
 
 	"github.com/gorilla/mux"
 )
@@ -37,8 +36,6 @@ func (service Service) PostProjectZip() *Endpoint {
 			err := fmt.Errorf("s3Uri not present in request's JSON body.")
 			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
-
-		fmt.Println(path.Join(service.S3_MOUNTPOINT, *reqObject.S3Uri))
 
 		projectName, err := UploadProject(service, *reqObject.S3Uri)
 		if err != nil {

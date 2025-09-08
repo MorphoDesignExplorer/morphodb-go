@@ -1,6 +1,7 @@
 package morphoroutes
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -130,6 +131,21 @@ func SuccessfulResponse(writer http.ResponseWriter, request *http.Request, conte
 	writer.Header().Add("Content-Type", "application/json")
 	writer.WriteHeader(http.StatusOK)
 	writer.Write(content)
+}
+
+func SuccessfulGzippedResponse(writer http.ResponseWriter, request *http.Request, content []byte, isJson bool) {
+	if request.Method == "GET" {
+		GlobalCache.Cache(request.URL.Path+"?"+request.URL.RawQuery, content)
+	}
+	if isJson {
+		writer.Header().Add("Content-Type", "application/json")
+	} else {
+		writer.Header().Add("Content-Type", "text/csv")
+	}
+	writer.Header().Add("Content-Encoding", "gzip")
+	gzipWriter := gzip.NewWriter(writer)
+	writer.WriteHeader(http.StatusOK)
+	gzipWriter.Write(content)
 }
 
 // Messages for some common errors.

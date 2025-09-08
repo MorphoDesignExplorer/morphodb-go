@@ -147,13 +147,24 @@ func (service Service) GetSolutionEndpoint() *Endpoint {
 			return APIError{http.StatusServiceUnavailable, OPEN_DB_ERROR, NewServerError(err)}
 		}
 
-		bytes, err := json.Marshal(solutionSet)
-		if err != nil {
-			return APIError{http.StatusInternalServerError, JSON_MARSHAL_ERROR, NewServerError(err)}
+		urlParams := request.URL.Query()
+
+		var bytes []byte
+		hasCsv := urlParams.Has("csv")
+		if hasCsv {
+			bytes = SolutionSet(solutionSet).CsvMarshal()
+		} else {
+			bytes, err = json.Marshal(solutionSet)
+			if err != nil {
+				return APIError{http.StatusInternalServerError, JSON_MARSHAL_ERROR, NewServerError(err)}
+			}
 		}
 
-		GlobalCache.Cache(request.URL.Path, bytes)
-		SuccessfulResponse(writer, request, bytes)
+		if hasCsv {
+			SuccessfulGzippedResponse(writer, request, bytes, false)
+		} else {
+			SuccessfulGzippedResponse(writer, request, bytes, true)
+		}
 		return nil
 	})
 }

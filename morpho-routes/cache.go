@@ -63,7 +63,7 @@ func (c *Cacher) InvalidateAll() {
 // Middleware to cache responses.
 func CacheMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		contents, present := GlobalCache.GetCached(r.URL.Path)
+		contents, present := GlobalCache.GetCached(r.URL.Path + "?" + r.URL.RawQuery)
 		if !present || r.Method != "GET" {
 			next.ServeHTTP(w, r)
 			return

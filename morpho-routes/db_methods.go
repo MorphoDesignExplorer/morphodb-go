@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -341,6 +342,38 @@ func (s SolutionSet) Create(tx *sql.Tx, projectName string) error {
 	}
 
 	return nil
+}
+
+func (s SolutionSet) CsvMarshal() []byte {
+	out := make([]byte, 0)
+
+	headers := []string{"id", "scoped_id"}
+	for key := range s[0].Parameter {
+		headers = append(headers, "parameters."+key)
+	}
+	for key := range s[0].OutputParameter {
+		headers = append(headers, "output_parameters."+key)
+	}
+	for _, asset := range s[0].Assets {
+		headers = append(headers, "asset."+asset.Tag)
+	}
+
+	out = append(out, []byte(strings.Join(headers, ",")+"\n")...)
+	for _, solution := range s {
+		row := []string{solution.Id, solution.ScopedId}
+		for _, value := range solution.Parameter {
+			row = append(row, strconv.FormatFloat(value, 'g', -1, 64))
+		}
+		for _, value := range solution.OutputParameter {
+			row = append(row, strconv.FormatFloat(value, 'g', -1, 64))
+		}
+		for _, asset := range solution.Assets {
+			row = append(row, asset.File)
+		}
+		out = append(out, []byte(strings.Join(row, ",")+"\n")...)
+	}
+
+	return out
 }
 
 /*
