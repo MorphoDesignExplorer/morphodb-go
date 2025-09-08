@@ -2,6 +2,7 @@ package morphoroutes
 
 import (
 	"archive/zip"
+	"bytes"
 	"database/sql"
 	"fmt"
 	"io"
@@ -11,6 +12,58 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+// Uploads two versions of a project's solutions to the filesystem as CSVs; One human-readable and the other for the API.
+// If run locally, this is saved to the filesystem. Otherwise, the CSVs are saved to S3.
+func UploadCsv(service Service, projectName string) error {
+	NonArchivalUrlGenerator := func(filename string) string {
+		switch service.ENVIRONMENT {
+		case "prod":
+			return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", service.AWS_STORAGE_BUCKET_NAME, service.AWS_REGION, filename)
+		case "dev":
+			return fmt.Sprintf("http://localhost:%s/%s", service.PORT, filename)
+		default:
+			return ""
+		}
+	}
+
+	archivalUrlGenerator := func(filename string) string {
+		return filename
+	}
+
+	nonArchivalSolutions, err := GetSolutions(map[string]string{"project": projectName}, service, NonArchivalUrlGenerator)
+	if err != nil {
+		return err
+	}
+
+	archivalSolutions, err := GetSolutions(map[string]string{"project": projectName}, service, archivalUrlGenerator)
+	if err != nil {
+		return err
+	}
+
+	// Create CSV file streams for upload
+	nonArchivalCsv := io.NopCloser(bytes.NewBuffer(SolutionSet(nonArchivalSolutions).CsvMarshal(false)))
+	archivalCsv := io.NopCloser(bytes.NewBuffer(SolutionSet(archivalSolutions).CsvMarshal(true)))
+
+	// should be something like assets/GCGA_10/data.csv
+	if service.ENVIRONMENT == "prod" {
+		if _, err = uploadAssetS3(nonArchivalCsv, path.Join(projectName, "data_api"), ".csv"); err != nil {
+			return err
+		}
+		if _, err = uploadAssetS3(archivalCsv, path.Join(projectName, "data"), ".csv"); err != nil {
+			return err
+		}
+	} else {
+		if _, err = uploadAssetsLocal(nonArchivalCsv, path.Join(projectName, "data_api"), ".csv"); err != nil {
+			return err
+		}
+		if _, err = uploadAssetsLocal(archivalCsv, path.Join(projectName, "data"), ".csv"); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
 
 type FileTuple struct {
 	name string
@@ -206,7 +259,7 @@ func UploadProject(service Service, s3Uri string) (projectName string, err error
 
 		// fmt.Println(projects[0].Assets, fileMap)
 
-		err = CreateAssets(realtx, projects[0].Assets, solution.Id, fileMap)
+		err = CreateAssets(realtx, projects[0].Assets, solution, projects[0].ProjectName, fileMap)
 		if err != nil {
 			return "", APIError{http.StatusInternalServerError, "Could not upload assets to internal database and storage bucket.", NewServerError(err)}
 		}
@@ -231,6 +284,10 @@ func UploadProject(service Service, s3Uri string) (projectName string, err error
 
 	if err = realtx.Commit(); err != nil {
 		return "", APIError{http.StatusInternalServerError, "Could not commit transaction on internal database.", NewServerError(err)}
+	}
+
+	if err = UploadCsv(service, projects[0].ProjectName); err != nil {
+		return "", APIError{http.StatusInternalServerError, "Could not upload CSV data to internal database.", NewServerError(err)}
 	}
 
 	return projects[0].ProjectName, nil

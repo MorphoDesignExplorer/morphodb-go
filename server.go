@@ -45,6 +45,17 @@ func setupDB(service morphoroutes.Service) error {
 		return morphoroutes.NewServerError(err)
 	}
 
+	// Refresh data CSVs on server startup. This is either done here or during project upload.
+	if projects, err := morphoroutes.GetProjects(map[string]string{}, service); err == nil {
+		for _, project := range projects {
+			if err = morphoroutes.UploadCsv(service, project.ProjectName); err != nil {
+				return morphoroutes.NewServerError(err)
+			}
+		}
+	} else {
+		return morphoroutes.NewServerError(err)
+	}
+
 	return nil
 }
 

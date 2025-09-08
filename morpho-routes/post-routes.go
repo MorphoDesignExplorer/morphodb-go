@@ -318,6 +318,13 @@ func (service Service) PostAssetEndpoint() *Endpoint {
 			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
 		}
 
+		var projectName string
+		projectNameRow := db.QueryRow("select project_name from solution where id = ?", solutionId)
+		err = projectNameRow.Scan(&projectName)
+		if err != nil {
+			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}
+		}
+
 		files := make(map[string]Openable)
 
 		// validate that there's only one file uploaded per tag
@@ -339,7 +346,13 @@ func (service Service) PostAssetEndpoint() *Endpoint {
 		}
 		defer tx.Rollback()
 
-		err = CreateAssets(tx, projectAssets, solutionId, files)
+		urlGen := func(name string) string { return name }
+		solution, err := GetSolution(tx, projectName, solutionId, &urlGen)
+		if err != nil {
+			return APIError{http.StatusInternalServerError, "Could not find solution on database.", NewServerError(err)}
+		}
+
+		err = CreateAssets(tx, projectAssets, solution, projectName, files)
 		if err != nil {
 			LogError(err)
 			return APIError{http.StatusBadRequest, err.Error(), NewServerError(err)}

@@ -152,7 +152,7 @@ func (service Service) GetSolutionEndpoint() *Endpoint {
 		var bytes []byte
 		hasCsv := urlParams.Has("csv")
 		if hasCsv {
-			bytes = SolutionSet(solutionSet).CsvMarshal()
+			bytes = SolutionSet(solutionSet).CsvMarshal(false)
 		} else {
 			bytes, err = json.Marshal(solutionSet)
 			if err != nil {

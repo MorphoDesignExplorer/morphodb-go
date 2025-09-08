@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"mime/multipart"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -344,18 +345,32 @@ func (s SolutionSet) Create(tx *sql.Tx, projectName string) error {
 	return nil
 }
 
-func (s SolutionSet) CsvMarshal() []byte {
+// Marshals a SolutionSet into a CSV string.
+// If archive is set to true, the output is human readable.
+func (s SolutionSet) CsvMarshal(archive bool) []byte {
 	out := make([]byte, 0)
 
 	headers := []string{"id", "scoped_id"}
 	for key := range s[0].Parameter {
-		headers = append(headers, "parameters."+key)
+		if archive {
+			headers = append(headers, key)
+		} else {
+			headers = append(headers, "parameters."+key)
+		}
 	}
 	for key := range s[0].OutputParameter {
-		headers = append(headers, "output_parameters."+key)
+		if archive {
+			headers = append(headers, key)
+		} else {
+			headers = append(headers, "output_parameters."+key)
+		}
 	}
 	for _, asset := range s[0].Assets {
-		headers = append(headers, "asset."+asset.Tag)
+		if archive {
+			headers = append(headers, asset.Tag)
+		} else {
+			headers = append(headers, "asset."+asset.Tag)
+		}
 	}
 
 	out = append(out, []byte(strings.Join(headers, ",")+"\n")...)
@@ -472,20 +487,24 @@ func CreateS3Client() (*s3.Client, error) {
 /*
 Uploads assets to S3.
 
-fileHeader is a file fetched from a multipart post form.
-name is the name of the file on disk.
+file is a ReadCloser interface.
+name is the name the file must be saved under (without the extension).
+ext is the extension of the file. Leave it empty for auto-detection.
 
 This method does not use any AWS credentials, and relies on the instance having IAM policies that allow GET/PUT/DELETE on the morpho-images bucket.
 
 Returns an error if any step of the process fails, and the file's extension.
 */
-func uploadAssetS3(file io.ReadCloser, name string) (string, error) {
+func uploadAssetS3(file io.ReadCloser, name, ext string) (string, error) {
 	contents, err := io.ReadAll(file)
 	if err != nil {
 		return "", err
 	}
 
 	mime := mimetype.Detect(contents)
+	if ext == "" {
+		ext = mime.Extension()
+	}
 
 	client, err := CreateS3Client()
 	if err != nil {
@@ -494,7 +513,7 @@ func uploadAssetS3(file io.ReadCloser, name string) (string, error) {
 
 	_, err = client.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket:      aws.String("morpho-images"),
-		Key:         aws.String(fmt.Sprintf("assets/%s%s", name, mime.Extension())),
+		Key:         aws.String(path.Join("assets", name+ext)),
 		Body:        file,
 		ContentType: aws.String(mime.String()),
 	})
@@ -522,22 +541,25 @@ TODO: Restrict MIME types sensibly.
 
 Returns an error if any step of the process fails, and the file's extension.
 */
-func uploadAssetsLocal(file io.ReadCloser, name string) (string, error) {
+func uploadAssetsLocal(file io.ReadCloser, name, ext string) (string, error) {
 	contents, err := io.ReadAll(file)
 	if err != nil {
-		return "", err
+		return "", NewServerError(err)
 	}
 
 	mime := mimetype.Detect(contents)
+	if ext == "" {
+		ext = mime.Extension()
+	}
 
-	if writeHandle, err := os.OpenFile(fmt.Sprintf("assets/%s%s", name, mime.Extension()), os.O_CREATE|os.O_RDWR, 0644); err == nil {
+	if writeHandle, err := os.OpenFile(fmt.Sprintf("assets/%s%s", name, ext), os.O_CREATE|os.O_RDWR, 0644); err == nil {
 		n, err := writeHandle.Write(contents)
 		if n != len(contents) || err != nil {
 			return "", fmt.Errorf("could not write complete file: " + err.Error())
 		}
-		return mime.Extension(), nil
+		return ext, nil
 	} else {
-		return "", err
+		return "", NewServerError(err)
 	}
 }
 
@@ -603,7 +625,7 @@ files is either a map of compressed zip files, or a map of multipart form files 
 
 Returns an error if any step of the process fails.
 */
-func CreateAssets(tx *sql.Tx, filetags []ProjectAssetField, solutionId string, files map[string]Openable) error {
+func CreateAssets(tx *sql.Tx, filetags []ProjectAssetField, solution Solution, projectName string, files map[string]Openable) error {
 	// Uploads a file associated with an asset to the storage bucket.
 
 	tagMap := make(map[string]bool)
@@ -624,7 +646,7 @@ func CreateAssets(tx *sql.Tx, filetags []ProjectAssetField, solutionId string, f
 			return err
 		}
 
-		randomName := fmt.Sprintf("%s_%s", solutionId, randString(7))
+		name := path.Join(projectName, tag, solution.ScopedId)
 
 		config, err := StartService()
 		if err != nil {
@@ -638,12 +660,12 @@ func CreateAssets(tx *sql.Tx, filetags []ProjectAssetField, solutionId string, f
 
 		var extension string
 		if config.ENVIRONMENT == "prod" {
-			extension, err = uploadAssetS3(file, randomName)
+			extension, err = uploadAssetS3(file, name, "")
 			if err != nil {
 				return err
 			}
 		} else {
-			extension, err = uploadAssetsLocal(file, randomName)
+			extension, err = uploadAssetsLocal(file, name, "")
 			if err != nil {
 				return err
 			}
@@ -657,9 +679,9 @@ func CreateAssets(tx *sql.Tx, filetags []ProjectAssetField, solutionId string, f
 		if _, err = tx.Exec(
 			"INSERT INTO asset (id, file, tag, solution_id) VALUES (?, ?, ?, ?)",
 			auuid.String(),
-			fmt.Sprintf("assets/%s%s", randomName, extension),
+			path.Join("assets", name+extension),
 			tag,
-			solutionId,
+			solution.Id,
 		); err != nil {
 			return err
 		}
