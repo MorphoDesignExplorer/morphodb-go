@@ -12,7 +12,8 @@ type Service struct {
 	AWS_REGION              string // what is the aws region we're running on?
 	AWS_STORAGE_BUCKET_NAME string // what is the name of the storage bucket?
 	ENVIRONMENT             string // are we running this server on production? (either prod or dev)
-	S3_MOUNTPOINT           string // path to local S3 mountpoint folder
+	S3_TEMP                 string // path to local folder pointing to the morpho-temp bucket
+	S3_IMAGES               string // path to local folder pointing to the morpho-images bucket
 }
 
 func (c *Service) GetDB() (*sql.DB, error) {
@@ -48,9 +49,14 @@ func StartService() (Service, error) {
 		return result, errors.New("ENVIRONMENT can only have the following values: prod, dev")
 	}
 
-	result.S3_MOUNTPOINT = os.Getenv("S3_MOUNTPOINT")
+	result.S3_TEMP = os.Getenv("S3_TEMP")
 	if len(result.ENVIRONMENT) == 0 {
-		return result, errors.New("S3_MOUNTPOINT was not set")
+		return result, errors.New("S3_TEMP was not set")
+	}
+
+	result.S3_IMAGES = os.Getenv("S3_IMAGES")
+	if len(result.ENVIRONMENT) == 0 {
+		return result, errors.New("S3_IMAGES was not set")
 	}
 
 	return result, nil

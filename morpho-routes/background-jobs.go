@@ -47,7 +47,7 @@ func RepopulateCSV(ctx map[string]any, service Service) error {
 func fileUrlGenerator(service Service, filename string) string {
 	switch service.ENVIRONMENT {
 	case "prod":
-		return fmt.Sprintf("%s/%s", service.S3_MOUNTPOINT, filename)
+		return fmt.Sprintf("%s/%s", service.S3_IMAGES, filename)
 	case "dev":
 		return fmt.Sprintf("./%s", filename)
 	default:

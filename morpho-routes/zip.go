@@ -16,6 +16,17 @@ import (
 // Uploads two versions of a project's solutions to the filesystem as CSVs; One human-readable and the other for the API.
 // If run locally, this is saved to the filesystem. Otherwise, the CSVs are saved to S3.
 func UploadCsv(service Service, projectName string) error {
+	urlGenerator := func(filename string) string {
+		switch service.ENVIRONMENT {
+		case "prod":
+			return fmt.Sprintf("%s/%s", service.S3_IMAGES, filename)
+		case "dev":
+			return fmt.Sprintf("./%s", filename)
+		default:
+			return ""
+		}
+	}
+
 	NonArchivalUrlGenerator := func(filename string) string {
 		switch service.ENVIRONMENT {
 		case "prod":
@@ -45,21 +56,31 @@ func UploadCsv(service Service, projectName string) error {
 	nonArchivalCsv := io.NopCloser(bytes.NewBuffer(SolutionSet(nonArchivalSolutions).CsvMarshal(false)))
 	archivalCsv := io.NopCloser(bytes.NewBuffer(SolutionSet(archivalSolutions).CsvMarshal(true)))
 
-	// should be something like assets/GCGA_10/data.csv
-	if service.ENVIRONMENT == "prod" {
-		if _, err = uploadAssetS3(nonArchivalCsv, path.Join(projectName, "data_api"), ".csv"); err != nil {
-			return err
-		}
-		if _, err = uploadAssetS3(archivalCsv, path.Join(projectName, "data"), ".csv"); err != nil {
-			return err
-		}
-	} else {
-		if _, err = uploadAssetsLocal(nonArchivalCsv, path.Join(projectName, "data_api"), ".csv"); err != nil {
-			return err
-		}
-		if _, err = uploadAssetsLocal(archivalCsv, path.Join(projectName, "data"), ".csv"); err != nil {
-			return err
-		}
+	// file url should be something like assets/GCGA_10/data.csv
+	onlineArchivalCsvHandle, err := os.OpenFile(
+		urlGenerator(fmt.Sprintf("assets/%s/data.csv", projectName)),
+		os.O_CREATE|os.O_WRONLY,
+		0644)
+	if err != nil {
+		return NewServerError(err)
+	}
+	defer onlineArchivalCsvHandle.Close()
+
+	onlineNonArchivalCsvHandle, err := os.OpenFile(
+		urlGenerator(fmt.Sprintf("assets/%s/data_api.csv", projectName)),
+		os.O_CREATE|os.O_WRONLY,
+		0644)
+	if err != nil {
+		return NewServerError(err)
+	}
+	defer onlineNonArchivalCsvHandle.Close()
+
+	if _, err = io.Copy(onlineNonArchivalCsvHandle, nonArchivalCsv); err != nil {
+		return NewServerError(err)
+	}
+
+	if _, err := io.Copy(onlineArchivalCsvHandle, archivalCsv); err != nil {
+		return NewServerError(err)
 	}
 
 	return nil
@@ -71,7 +92,7 @@ func UploadArchive(service Service, projectName string) error {
 	urlGenerator := func(filename string) string {
 		switch service.ENVIRONMENT {
 		case "prod":
-			return fmt.Sprintf("%s/%s", service.S3_MOUNTPOINT, filename)
+			return fmt.Sprintf("%s/%s", service.S3_IMAGES, filename)
 		case "dev":
 			return fmt.Sprintf("./%s", filename)
 		default:
@@ -226,7 +247,7 @@ func getMetadata(db *sql.DB, projectName string) (m Metadata, err error) {
 
 func UploadProject(service Service, s3Uri string) (projectName string, err error) {
 
-	file, err := os.Open(path.Join(service.S3_MOUNTPOINT, s3Uri))
+	file, err := os.Open(path.Join(service.S3_TEMP, s3Uri))
 	if err != nil {
 		return "", APIError{http.StatusBadRequest, "Could not find uploaded zip in S3 bucket.", NewServerError(err)}
 	}
