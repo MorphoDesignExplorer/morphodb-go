@@ -65,6 +65,90 @@ func UploadCsv(service Service, projectName string) error {
 	return nil
 }
 
+// Uploads an archive of a project to the filesystem as a zipfile.
+// If run locally, this is saved to the filesystem. Otherwise, the archive is saved to S3.
+func UploadArchive(service Service, projectName string) error {
+	urlGenerator := func(filename string) string {
+		switch service.ENVIRONMENT {
+		case "prod":
+			return fmt.Sprintf("%s/%s", service.S3_MOUNTPOINT, filename)
+		case "dev":
+			return fmt.Sprintf("./%s", filename)
+		default:
+			return ""
+		}
+	}
+
+	// we create the zip archive in /tmp and then copy it over the s3 after archival is done
+	zipFileHandle, err := os.OpenFile("/tmp/temp_archive_"+projectName+".zip", os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return NewServerError(err)
+	}
+	defer zipFileHandle.Close()
+
+	zipFile := zip.NewWriter(zipFileHandle)
+
+	solutions, err := GetSolutions(map[string]string{"project": projectName}, service, urlGenerator)
+	if err != nil {
+		return NewServerError(err)
+	}
+
+	for _, solution := range solutions {
+		for _, asset := range solution.Assets {
+			assetBytes, err := os.ReadFile(asset.File)
+			if err != nil {
+				return NewServerError(err)
+			}
+
+			_, filename := path.Split(asset.File)
+
+			zipCounterpart, err := zipFile.Create(fmt.Sprintf("%s/%s", asset.Tag, filename))
+			if err != nil {
+				return NewServerError(err)
+			}
+			zipCounterpart.Write(assetBytes)
+		}
+	}
+
+	csvUrl := urlGenerator(fmt.Sprintf("assets/%s/data.csv", projectName))
+
+	csvBytes, err := os.ReadFile(csvUrl)
+	if err != nil {
+		return NewServerError(err)
+	}
+
+	zipCounterpart, err := zipFile.Create("data.csv")
+	if err != nil {
+		return NewServerError(err)
+	}
+
+	zipCounterpart.Write(csvBytes)
+	zipFile.Flush()
+	zipFile.Close()
+
+	onlineFileHandle, err := os.OpenFile(
+		urlGenerator(fmt.Sprintf("assets/%s/archive.zip", projectName)),
+		os.O_CREATE|os.O_WRONLY,
+		0644)
+	if err != nil {
+		return NewServerError(err)
+	}
+	defer onlineFileHandle.Close()
+
+	zipFileHandle.Seek(0, 0)
+	_, err = io.Copy(onlineFileHandle, zipFileHandle)
+	if err != nil {
+		return NewServerError(err)
+	}
+
+	err = os.Remove("/tmp/temp_archive_" + projectName + ".zip")
+	if err != nil {
+		return NewServerError(err)
+	}
+
+	return nil
+}
+
 type FileTuple struct {
 	name string
 	file *zip.File

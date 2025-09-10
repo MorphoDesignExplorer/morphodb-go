@@ -182,6 +182,8 @@ func main() {
 		return
 	}
 
+	go service.BackgroundJob(morphoroutes.RepopulateCSV, 1*time.Hour, map[string]any{})
+
 	topRouter := SetupRouter()
 	log.Println("listening on port", service.PORT)
 	log.Fatal(http.ListenAndServe(":"+service.PORT, topRouter))
