@@ -485,6 +485,32 @@ func CreateS3Client() (*s3.Client, error) {
 }
 
 /*
+ * Uploads asset to S3, through a mounted S3 bucket folder.
+ *
+ * service is the Server's Service object
+ * file is an io.Reader object
+ * name is the path of the new file within the bucket.
+ *
+ * This method relies on a bucket being mounted through mountpoint-S3, with read and write permissions.
+ *
+ * Returns an error if the new file can't be opened or written to.
+ */
+func UploadAssetMountpointS3(service Service, file io.Reader, name string) error {
+	// the flags provided are the right incantations needed to perform a write on a new file
+	handle, err := os.OpenFile(path.Join(service.S3_IMAGES, name), os.O_CREATE|os.O_TRUNC|os.O_EXCL|os.O_RDWR, 0644)
+	if err != nil {
+		return NewServerError(err)
+	}
+	defer handle.Close()
+
+	if _, err = io.Copy(handle, file); err != nil {
+		return NewServerError(err)
+	}
+
+	return nil
+}
+
+/*
 Uploads assets to S3.
 
 file is a ReadCloser interface.

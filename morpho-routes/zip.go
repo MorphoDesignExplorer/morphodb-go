@@ -34,33 +34,24 @@ func UploadCsv(service Service, projectName string) error {
 
 	nonArchivalSolutions, err := GetSolutions(map[string]string{"project": projectName}, service, NonArchivalUrlGenerator)
 	if err != nil {
-		return err
+		return NewServerError(err)
 	}
 
 	archivalSolutions, err := GetSolutions(map[string]string{"project": projectName}, service, archivalUrlGenerator)
 	if err != nil {
-		return err
+		return NewServerError(err)
 	}
 
 	// Create CSV file streams for upload
 	nonArchivalCsv := io.NopCloser(bytes.NewReader(SolutionSet(nonArchivalSolutions).CsvMarshal(false)))
 	archivalCsv := io.NopCloser(bytes.NewReader(SolutionSet(archivalSolutions).CsvMarshal(true)))
 
-	// file url should be something like assets/GCGA_10/data.csv
-	if service.ENVIRONMENT == "prod" {
-		if _, err = uploadAssetS3(nonArchivalCsv, path.Join(projectName, "data_api"), ".csv"); err != nil {
-			return err
-		}
-		if _, err = uploadAssetS3(archivalCsv, path.Join(projectName, "data"), ".csv"); err != nil {
-			return err
-		}
-	} else {
-		if _, err = uploadAssetsLocal(nonArchivalCsv, path.Join(projectName, "data_api"), ".csv"); err != nil {
-			return err
-		}
-		if _, err = uploadAssetsLocal(archivalCsv, path.Join(projectName, "data"), ".csv"); err != nil {
-			return err
-		}
+	if err = UploadAssetMountpointS3(service, nonArchivalCsv, path.Join("assets", projectName, "data_api.csv")); err != nil {
+		return NewServerError(err)
+	}
+
+	if err = UploadAssetMountpointS3(service, archivalCsv, path.Join("assets", projectName, "data.csv")); err != nil {
+		return NewServerError(err)
 	}
 
 	return nil
@@ -127,23 +118,13 @@ func UploadArchive(service Service, projectName string) error {
 	zipFile.Flush()
 	zipFile.Close()
 
-	onlineFileHandle, err := os.OpenFile(
-		urlGenerator(fmt.Sprintf("assets/%s/archive.zip", projectName)),
-		os.O_CREATE|os.O_WRONLY,
-		0644)
-	if err != nil {
-		return NewServerError(err)
-	}
-	defer onlineFileHandle.Close()
-
 	zipFileHandle.Seek(0, 0)
-	_, err = io.Copy(onlineFileHandle, zipFileHandle)
-	if err != nil {
+
+	if err = UploadAssetMountpointS3(service, zipFileHandle, path.Join("assets", projectName, "archive.zip")); err != nil {
 		return NewServerError(err)
 	}
 
-	err = os.Remove("/tmp/temp_archive_" + projectName + ".zip")
-	if err != nil {
+	if err = os.Remove("/tmp/temp_archive_" + projectName + ".zip"); err != nil {
 		return NewServerError(err)
 	}
 
