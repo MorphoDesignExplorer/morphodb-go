@@ -2,7 +2,6 @@ package morphoroutes
 
 import (
 	"archive/zip"
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -502,8 +501,6 @@ func uploadAssetS3(file io.ReadCloser, name, ext string) (string, error) {
 		return "", NewServerError(err)
 	}
 
-	clonedBuf := io.NopCloser(bytes.NewBuffer(contents))
-
 	mime := mimetype.Detect(contents)
 	if ext == "" {
 		ext = mime.Extension()
@@ -517,7 +514,7 @@ func uploadAssetS3(file io.ReadCloser, name, ext string) (string, error) {
 	_, err = client.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket:        aws.String("morpho-images"),
 		Key:           aws.String(path.Join("assets", name+ext)),
-		Body:          clonedBuf,
+		Body:          file,
 		ContentType:   aws.String(mime.String()),
 		ContentLength: aws.Int64(int64(len(contents))),
 	})

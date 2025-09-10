@@ -53,36 +53,24 @@ func UploadCsv(service Service, projectName string) error {
 	}
 
 	// Create CSV file streams for upload
-	nonArchivalCsv := io.NopCloser(bytes.NewBuffer(SolutionSet(nonArchivalSolutions).CsvMarshal(false)))
-	archivalCsv := io.NopCloser(bytes.NewBuffer(SolutionSet(archivalSolutions).CsvMarshal(true)))
-
-	fmt.Println(urlGenerator(fmt.Sprintf("assets/%s/data.csv", projectName)))
+	nonArchivalCsv := io.NopCloser(bytes.NewReader(SolutionSet(nonArchivalSolutions).CsvMarshal(false)))
+	archivalCsv := io.NopCloser(bytes.NewReader(SolutionSet(archivalSolutions).CsvMarshal(true)))
 
 	// file url should be something like assets/GCGA_10/data.csv
-	onlineArchivalCsvHandle, err := os.OpenFile(
-		urlGenerator(fmt.Sprintf("assets/%s/data.csv", projectName)),
-		os.O_CREATE|os.O_WRONLY,
-		0644)
-	if err != nil {
-		return NewServerError(err)
-	}
-	defer onlineArchivalCsvHandle.Close()
-
-	onlineNonArchivalCsvHandle, err := os.OpenFile(
-		urlGenerator(fmt.Sprintf("assets/%s/data_api.csv", projectName)),
-		os.O_CREATE|os.O_WRONLY,
-		0644)
-	if err != nil {
-		return NewServerError(err)
-	}
-	defer onlineNonArchivalCsvHandle.Close()
-
-	if _, err = io.Copy(onlineNonArchivalCsvHandle, nonArchivalCsv); err != nil {
-		return NewServerError(err)
-	}
-
-	if _, err := io.Copy(onlineArchivalCsvHandle, archivalCsv); err != nil {
-		return NewServerError(err)
+	if service.ENVIRONMENT == "prod" {
+		if _, err = uploadAssetS3(nonArchivalCsv, path.Join(projectName, "data_api"), ".csv"); err != nil {
+			return err
+		}
+		if _, err = uploadAssetS3(archivalCsv, path.Join(projectName, "data"), ".csv"); err != nil {
+			return err
+		}
+	} else {
+		if _, err = uploadAssetsLocal(nonArchivalCsv, path.Join(projectName, "data_api"), ".csv"); err != nil {
+			return err
+		}
+		if _, err = uploadAssetsLocal(archivalCsv, path.Join(projectName, "data"), ".csv"); err != nil {
+			return err
+		}
 	}
 
 	return nil
