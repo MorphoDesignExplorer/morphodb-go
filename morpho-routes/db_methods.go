@@ -2,6 +2,7 @@ package morphoroutes
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -498,8 +499,10 @@ Returns an error if any step of the process fails, and the file's extension.
 func uploadAssetS3(file io.ReadCloser, name, ext string) (string, error) {
 	contents, err := io.ReadAll(file)
 	if err != nil {
-		return "", err
+		return "", NewServerError(err)
 	}
+
+	clonedBuf := io.NopCloser(bytes.NewBuffer(contents))
 
 	mime := mimetype.Detect(contents)
 	if ext == "" {
@@ -508,17 +511,18 @@ func uploadAssetS3(file io.ReadCloser, name, ext string) (string, error) {
 
 	client, err := CreateS3Client()
 	if err != nil {
-		return "", nil
+		return "", NewServerError(err)
 	}
 
 	_, err = client.PutObject(context.TODO(), &s3.PutObjectInput{
-		Bucket:      aws.String("morpho-images"),
-		Key:         aws.String(path.Join("assets", name+ext)),
-		Body:        file,
-		ContentType: aws.String(mime.String()),
+		Bucket:        aws.String("morpho-images"),
+		Key:           aws.String(path.Join("assets", name+ext)),
+		Body:          clonedBuf,
+		ContentType:   aws.String(mime.String()),
+		ContentLength: aws.Int64(int64(len(contents))),
 	})
 
-	return mime.Extension(), err
+	return mime.Extension(), NewServerError(err)
 }
 
 /*
