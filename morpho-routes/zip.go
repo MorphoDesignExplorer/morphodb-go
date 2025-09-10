@@ -16,16 +16,6 @@ import (
 // Uploads two versions of a project's solutions to the filesystem as CSVs; One human-readable and the other for the API.
 // If run locally, this is saved to the filesystem. Otherwise, the CSVs are saved to S3.
 func UploadCsv(service Service, projectName string) error {
-	urlGenerator := func(filename string) string {
-		switch service.ENVIRONMENT {
-		case "prod":
-			return path.Join(service.S3_IMAGES, filename)
-		case "dev":
-			return fmt.Sprintf("./%s", filename)
-		default:
-			return ""
-		}
-	}
 
 	NonArchivalUrlGenerator := func(filename string) string {
 		switch service.ENVIRONMENT {
