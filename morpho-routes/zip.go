@@ -19,7 +19,7 @@ func UploadCsv(service Service, projectName string) error {
 	urlGenerator := func(filename string) string {
 		switch service.ENVIRONMENT {
 		case "prod":
-			return fmt.Sprintf("%s/%s", service.S3_IMAGES, filename)
+			return path.Join(service.S3_IMAGES, filename)
 		case "dev":
 			return fmt.Sprintf("./%s", filename)
 		default:
@@ -55,6 +55,8 @@ func UploadCsv(service Service, projectName string) error {
 	// Create CSV file streams for upload
 	nonArchivalCsv := io.NopCloser(bytes.NewBuffer(SolutionSet(nonArchivalSolutions).CsvMarshal(false)))
 	archivalCsv := io.NopCloser(bytes.NewBuffer(SolutionSet(archivalSolutions).CsvMarshal(true)))
+
+	fmt.Println(urlGenerator(fmt.Sprintf("assets/%s/data.csv", projectName)))
 
 	// file url should be something like assets/GCGA_10/data.csv
 	onlineArchivalCsvHandle, err := os.OpenFile(
