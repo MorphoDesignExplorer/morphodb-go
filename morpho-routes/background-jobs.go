@@ -1,7 +1,6 @@
 package morphoroutes
 
 import (
-	"fmt"
 	"log"
 	"path"
 	"time"
@@ -41,17 +40,6 @@ func RepopulateCSV(ctx map[string]any, service Service) error {
 	return nil
 }
 
-func fileUrlGenerator(service Service, filename string) string {
-	switch service.ENVIRONMENT {
-	case "prod":
-		return fmt.Sprintf("%s/%s", service.S3_IMAGES, filename)
-	case "dev":
-		return fmt.Sprintf("./%s", filename)
-	default:
-		return ""
-	}
-}
-
 func RepopulateArchiveZip(ctx map[string]any, service Service) error {
 	log.Println("starting archival job...")
 	db, err := service.GetDB()
@@ -69,11 +57,12 @@ func RepopulateArchiveZip(ctx map[string]any, service Service) error {
 			continue
 		}
 
+		log.Printf("started writing archive for %s...\n", project.ProjectName)
 		err = UploadArchive(service, project.ProjectName)
 		if err != nil {
 			log.Println(err)
 		}
-		log.Printf("wrote archive for %s...\n", project.ProjectName)
+		log.Printf("wrote archive for %s.\n", project.ProjectName)
 	}
 
 	return nil
