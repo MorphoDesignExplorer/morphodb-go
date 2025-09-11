@@ -63,9 +63,9 @@ func UploadArchive(service Service, projectName string) error {
 	urlGenerator := func(filename string) string {
 		switch service.ENVIRONMENT {
 		case "prod":
-			return fmt.Sprintf("%s/%s", service.S3_IMAGES, filename)
+			return path.Join(service.S3_IMAGES, filename)
 		case "dev":
-			return fmt.Sprintf("./%s", filename)
+			return path.Join(service.S3_IMAGES, filename)
 		default:
 			return ""
 		}
@@ -102,7 +102,7 @@ func UploadArchive(service Service, projectName string) error {
 		}
 	}
 
-	csvUrl := urlGenerator(fmt.Sprintf("assets/%s/data.csv", projectName))
+	csvUrl := urlGenerator(path.Join("assets", projectName, "data.csv"))
 
 	csvBytes, err := os.ReadFile(csvUrl)
 	if err != nil {

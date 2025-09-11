@@ -172,6 +172,7 @@ func main() {
 	}
 
 	go service.BackgroundJob(morphoroutes.RepopulateCSV, 1*time.Hour, map[string]any{})
+	go service.BackgroundJob(morphoroutes.RepopulateArchiveZip, 1*time.Hour, map[string]any{})
 
 	topRouter := SetupRouter()
 	log.Println("listening on port", service.PORT)
