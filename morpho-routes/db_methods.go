@@ -485,6 +485,18 @@ func CreateS3Client() (*s3.Client, error) {
 }
 
 /*
+ * Checks if a file exists at the location specified by name, in the morpho-images bucket.
+ *
+ * This method relies on a bucket being mounted through mountpoint-S3, with read and write permissions.
+ *
+ * Returns true if the file exists, else returns false.
+ */
+func CheckAssetExistenceS3(service Service, name string) bool {
+	_, err := os.Stat(path.Join(service.S3_IMAGES, name))
+	return err == nil
+}
+
+/*
  * Uploads asset to S3, through a mounted S3 bucket folder.
  *
  * service is the Server's Service object

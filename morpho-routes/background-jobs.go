@@ -1,11 +1,9 @@
 package morphoroutes
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 	"log"
-	"os"
+	"path"
 	"time"
 )
 
@@ -32,13 +30,12 @@ func RepopulateCSV(ctx map[string]any, service Service) error {
 	}
 
 	for _, project := range projects {
-		_, err := os.Stat(fileUrlGenerator(service, fmt.Sprintf("/assets/%s/data.csv", project.ProjectName)))
-		var pathError *fs.PathError
-		csvAbsent := errors.As(err, &pathError)
-		if csvAbsent {
-			log.Printf("writing csv data for %s...\n", project.ProjectName)
-			UploadCsv(service, project.ProjectName)
+		if CheckAssetExistenceS3(service, path.Join("assets", project.ProjectName, "data.csv")) || CheckAssetExistenceS3(service, path.Join("assets", project.ProjectName, "data_api.csv")) {
+			continue
 		}
+
+		log.Printf("writing csv data for %s...\n", project.ProjectName)
+		UploadCsv(service, project.ProjectName)
 	}
 
 	return nil
@@ -68,16 +65,15 @@ func RepopulateArchiveZip(ctx map[string]any, service Service) error {
 	}
 
 	for _, project := range projects {
-		_, err := os.Stat(fileUrlGenerator(service, fmt.Sprintf("assets/%s/archive.zip", project.ProjectName)))
-		var pathError *fs.PathError
-		archiveAbsent := errors.As(err, &pathError)
-		if archiveAbsent {
-			err = UploadArchive(service, project.ProjectName)
-			if err != nil {
-				log.Println(err)
-			}
-			log.Printf("wrote archive for %s...\n", project.ProjectName)
+		if CheckAssetExistenceS3(service, path.Join("assets", project.ProjectName, "archive.zip")) {
+			continue
 		}
+
+		err = UploadArchive(service, project.ProjectName)
+		if err != nil {
+			log.Println(err)
+		}
+		log.Printf("wrote archive for %s...\n", project.ProjectName)
 	}
 
 	return nil
