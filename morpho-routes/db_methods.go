@@ -2,6 +2,7 @@ package morphoroutes
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -544,6 +545,8 @@ func uploadAssetS3(file io.ReadCloser, name, ext string) (string, error) {
 		ext = mime.Extension()
 	}
 
+	stream := bytes.NewReader(contents) // need a seekable buffer for s3 upload
+
 	client, err := CreateS3Client()
 	if err != nil {
 		return "", NewServerError(err)
@@ -552,7 +555,7 @@ func uploadAssetS3(file io.ReadCloser, name, ext string) (string, error) {
 	_, err = client.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket:        aws.String("morpho-images"),
 		Key:           aws.String(path.Join("assets", name+ext)),
-		Body:          file,
+		Body:          stream,
 		ContentType:   aws.String(mime.String()),
 		ContentLength: aws.Int64(int64(len(contents))),
 	})
