@@ -560,7 +560,11 @@ func uploadAssetS3(file io.ReadCloser, name, ext string) (string, error) {
 		ContentLength: aws.Int64(int64(len(contents))),
 	})
 
-	return mime.Extension(), NewServerError(err)
+	if err != nil {
+		return mime.Extension(), NewServerError(err)
+	} else {
+		return mime.Extension(), nil
+	}
 }
 
 /*
